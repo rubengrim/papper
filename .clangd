@@ -1,0 +1,7 @@
+CompileFlags:
+  Add: [
+    -Wall,
+    -Wextra,
+    -pedantic,
+    -std=c++23,
+  ]
