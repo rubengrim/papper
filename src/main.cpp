@@ -1,56 +1,78 @@
 #include <bit>
 #include <cstring>
+#include <format>
 #include <iostream>
 #include <print>
 #include <thread>
+#include <tuple>
 #include <utility>
+#include <variant>
+#include <vector>
 
 #include "spsc_queue.h"
 
 inline constexpr size_t arg_buf_size = 121;
 
-enum ArgType : uint8_t
-{
-    UINT32,
-    FLOAT,
-};
-
 struct alignas(128) LogEvent
 {
     const char* fmt_str = "";
     std::byte arg_data[arg_buf_size] = {};
+    void (*decoding_fn)(const char*, const std::byte*, std::string&);
 };
 
-template <typename T>
-constexpr ArgType get_arg_type_info()
+template <typename... Args>
+void deserialize_and_format(const char* fmt_str, const std::byte* arg_data,
+                            std::string& output)
 {
-    // clang-format off
-    if      constexpr (std::is_same_v<T, uint32_t>) return ArgType::UINT32;
-    else if constexpr (std::is_same_v<T, float>)    return ArgType::FLOAT;
-    else    static_assert(!sizeof(T), "unsupported argument type");
-    // clang-format on
+    using ArgsTuple = std::tuple<std::remove_reference_t<Args>...>;
+    ArgsTuple args;
+
+    size_t offset = 0;
+    [&]<size_t... Is>(std::index_sequence<Is...>) {
+        ((std::memcpy(&std::get<Is>(args),
+                      arg_data + offset,
+                      sizeof(std::tuple_element_t<Is, ArgsTuple>)),
+          offset += sizeof(std::tuple_element_t<Is, ArgsTuple>)),
+         ...);
+    }(std::index_sequence_for<Args...>{});
+
+    std::apply(
+        [&](auto&&... v) {
+            output = std::vformat(fmt_str, std::make_format_args(v...));
+        },
+        args);
 }
 
 template <typename T>
-void write_arg(std::byte* buffer, size_t& offset, const T& arg)
+void write_arg(std::byte* buffer, size_t& offset, const T& arg, bool& too_big)
 {
-    ArgType type = get_arg_type_info<T>();
-    if (offset + sizeof(ArgType) + sizeof(T) >= arg_buf_size)
-        return; // Drop arg if it doesn't fit
+    if (offset + sizeof(T) >= arg_buf_size)
+    {
+        too_big = true;
+        return;
+    }
 
-    std::memcpy(buffer + offset, &type, sizeof(ArgType));
-    offset += sizeof(ArgType);
     std::memcpy(buffer + offset, &arg, sizeof(T));
     offset += sizeof(T);
 }
 
 template <typename QueueType, typename... Args>
-void log(QueueType& queue, const char* fmt, Args&&... args)
+void log(QueueType& queue, const char* fmt_str, Args&&... args)
 {
+    static_assert(
+        (std::is_trivially_copyable_v<std::remove_reference_t<Args>> && ...),
+        "format arguments must be trivially copyable");
+
     LogEvent event;
-    event.fmt_str = fmt;
+    event.fmt_str = fmt_str;
+    event.decoding_fn = &deserialize_and_format<Args...>;
+
     size_t offset = 0;
-    ((write_arg(event.arg_data, offset, args), ...));
+    bool too_big = false;
+    ((write_arg(event.arg_data, offset, args, too_big), ...));
+    if (too_big) // Don't post the event if args don't fit in buffer
+        return;
+
     queue.push(event);
 }
 
@@ -64,32 +86,16 @@ int main()
             LogEvent event;
             if (queue.pop(event))
             {
-                size_t offset = 0;
-                ArgType type;
-                std::memcpy(&type, &event.arg_data + offset, sizeof(ArgType));
-                offset += sizeof(ArgType);
-                switch (type)
-                {
-                case ArgType::UINT32: {
-                    uint32_t val;
-                    std::memcpy(&val, &event.arg_data + offset, sizeof(uint32_t));
-                    std::print("uint32_t: {}\n", val);
-                    break;
-                }
-                case ArgType::FLOAT: {
-                    float val;
-                    std::memcpy(&val, &event.arg_data + offset, sizeof(float));
-                    std::print("float: {}\n", val);
-                    break;
-                }
-                }
+                std::string output_str;
+                event.decoding_fn(event.fmt_str, event.arg_data, output_str);
+                std::cout << output_str << std::endl;
             }
         }
     });
 
     std::thread t_producer([&queue]() {
         uint32_t i = 0;
-        while (i++ < 10)
+        while (i++ < 10000)
         {
             log(queue, "logging: {}", i);
         }
@@ -97,8 +103,6 @@ int main()
 
     t_logger.join();
     t_producer.join();
-
-    // std::cout << sizeof(LogEvent) << std::endl;
 
     return 0;
 }
