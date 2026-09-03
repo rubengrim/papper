@@ -12,5 +12,10 @@ target_sources(${PROJECT_NAME}
 
 target_compile_options(${PROJECT_NAME}
   PRIVATE
+    # -Wall -Wextra -pedantic -std=c++23 -fsanitize=address -g
     -Wall -Wextra -pedantic -std=c++23
 )
+# target_link_options(${PROJECT_NAME}
+#   PRIVATE
+#     -fsanitize=address
+# )

@@ -1,50 +1,57 @@
 #include <cstring>
-#include <format>
 #include <iostream>
 #include <thread>
-#include <tuple>
-#include <utility>
 
+#include "deserialize.h"
 #include "spsc_queue.h"
 
-inline constexpr size_t arg_buf_size = 121;
-
-struct alignas(128) LogEvent
+// Should be aligned?
+template <typename QueueType>
+struct LogEventHeader
 {
     const char* fmt_str = "";
-    std::byte arg_data[arg_buf_size] = {};
-    void (*decoding_fn)(const char*, const std::byte*, std::string&);
+    void (*decoding_fn)(const char*, QueueType&, std::string&);
 };
 
 template <typename QueueType, typename... Args>
 void log(QueueType& queue, const char* fmt_str, Args&&... args)
 {
+    static_assert(
+        (std::is_trivially_copyable_v<std::remove_reference_t<Args>> && ...),
+        "arguments must be trivially copyable");
 
-    LogEvent event;
-    event.fmt_str = fmt_str;
-    event.decoding_fn = &deserialize_and_format<Args...>;
+    constexpr size_t total_args_size = (sizeof(Args) + ...);
+    constexpr size_t header_plus_args_size
+        = total_args_size + sizeof(LogEventHeader<QueueType>);
+    if (header_plus_args_size > queue.free_size())
+        return; // Too big, drop this log event
 
-    size_t offset = 0;
-    bool too_big = false;
-    ((serialize_arg(event.arg_data, offset, args, too_big), ...));
-    if (too_big) // Don't post the event if args don't fit in buffer
-        return;
+    LogEventHeader<QueueType> header;
+    header.fmt_str = fmt_str;
+    header.decoding_fn = &decode_and_format<QueueType, Args...>;
 
-    queue.push(event);
+    // Push header
+    queue.push(reinterpret_cast<std::byte*>(&header),
+               sizeof(LogEventHeader<QueueType>));
+    // Push args
+    ((queue.push(reinterpret_cast<std::byte*>(&args), sizeof(args))), ...);
 }
 
 int main()
 {
-    SPSCQueue<LogEvent, 500> queue;
+    using QueueType = SPSCQueue<1000000>; // 1Mb
+    QueueType queue;
 
     std::thread t_logger([&queue]() {
         while (true)
         {
-            LogEvent event;
-            if (queue.pop(event))
+            LogEventHeader<QueueType> event_header;
+            if (queue.pop(reinterpret_cast<std::byte*>(&event_header),
+                          sizeof(LogEventHeader<QueueType>)))
             {
                 std::string output_str;
-                event.decoding_fn(event.fmt_str, event.arg_data, output_str);
+                event_header.decoding_fn(
+                    event_header.fmt_str, queue, output_str);
                 std::cout << output_str << std::endl;
             }
         }
@@ -54,7 +61,8 @@ int main()
         uint32_t i = 0;
         while (i++ < 10)
         {
-            log(queue, "logging: {}", i);
+            log(queue, "logging: {}, {:.5f}", i, (float)(i * 25.333));
+            log(queue, "hej hopp {}", i - 1);
         }
     });
 

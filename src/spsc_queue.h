@@ -25,16 +25,17 @@ class SPSCQueue
         = std::hardware_destructive_interference_size;
 
   public:
+    // May ONLY be called by producer
     bool push(const std::byte* data, const size_t size);
 
+    // May ONLY be called by consumer
     bool pop(std::byte* data, const size_t size);
 
-    // Read directly into T
-    template <typename T>
-    bool pop(T& value);
+    // May ONLY be called by producer
+    size_t free_size() const;
 
   private:
-    size_t free_to_write(const size_t read, const size_t write) const;
+    size_t free_size(const size_t read, const size_t write) const;
 
     size_t available_to_read(const size_t read, const size_t write) const;
 
@@ -43,5 +44,103 @@ class SPSCQueue
     alignas(_cache_line_len) std::atomic<size_t> _r{ 0 };
     alignas(_cache_line_len) std::atomic<size_t> _w{ 0 };
 };
+
+/*
+ * Implementations
+ */
+
+template <size_t min_capacity>
+bool SPSCQueue<min_capacity>::push(const std::byte* data, const size_t size)
+{
+    size_t write = _w.load(std::memory_order_relaxed);
+    const size_t read = _r.load(std::memory_order_acquire);
+
+    if (size > free_size(read, write))
+        return false; // Data doesn't fit, drop the write
+
+    if (write + size <= _capacity)
+    {
+        // Data can be copied without wrapping
+        std::memcpy(_buffer + write, data, size);
+        write = (write + size) & _wrap_mask;
+    }
+    else
+    {
+        // Copy until the end of _buffer, then wrap to beginning and copy
+        // remaining
+        const size_t to_end_of_buffer = _capacity - write;
+        std::memcpy(_buffer + write, data, to_end_of_buffer);
+        const size_t remaining = size - to_end_of_buffer;
+        std::memcpy(_buffer, data + to_end_of_buffer, remaining);
+        write = remaining;
+    }
+
+    _w.store(write, std::memory_order_release);
+
+    return true;
+}
+
+template <size_t min_capacity>
+bool SPSCQueue<min_capacity>::pop(std::byte* data, const size_t size)
+{
+    const size_t write = _w.load(std::memory_order_acquire);
+    size_t read = _r.load(std::memory_order_relaxed);
+
+    if (size > available_to_read(read, write))
+        return false; // Not enough to read
+
+    if (read + size <= _capacity)
+    {
+        // Data does not wrap so read linearly
+        std::memcpy(data, _buffer + read, size);
+        read = (read + size) & _wrap_mask;
+    }
+    else
+    {
+        // Read until the end of _buffer, then wrap to beginning and read
+        // remaining
+        const size_t to_end_of_buffer = _capacity - read;
+        std::memcpy(data, _buffer + read, to_end_of_buffer);
+        const size_t remaining = size - to_end_of_buffer;
+        std::memcpy(data + to_end_of_buffer, _buffer, remaining);
+        read = remaining;
+    }
+
+    _r.store(read, std::memory_order_release);
+
+    return true;
+}
+
+template <size_t min_capacity>
+size_t SPSCQueue<min_capacity>::free_size() const
+{
+    const size_t write = _w.load(std::memory_order_relaxed);
+    const size_t read = _r.load(std::memory_order_acquire);
+    return free_size(read, write);
+}
+
+template <size_t min_capacity>
+size_t SPSCQueue<min_capacity>::free_size(const size_t read,
+                                          const size_t write) const
+{
+    if (read > write)
+        return (read - write) - 1;
+    else
+        return (_capacity - (write - read)) - 1;
+}
+
+template <size_t min_capacity>
+size_t SPSCQueue<min_capacity>::available_to_read(const size_t read,
+                                                  const size_t write) const
+{
+    if (write >= read)
+    {
+        return write - read;
+    }
+    else
+    {
+        return _capacity - (read - write);
+    }
+}
 
 #endif
