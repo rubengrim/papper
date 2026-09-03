@@ -1,95 +1,45 @@
-#ifndef _SPSC_QUEUE_H_
-#define _SPSC_QUEUE_H_
+#ifndef _SPSC_CONT_QUEUE_H_
+#define _SPSC_CONT_QUEUE_H_
 
 #include <atomic>
 #include <bit>
 #include <cstddef>
 #include <cstdio>
+#include <cstring>
 #include <new>
 #include <optional>
 #include <utility>
 
-/**
- * Wait-free and thread-safe spsc queue.
- * True capacity is capacity-1 for implementation reasons.
- */
-template <typename T, size_t capacity>
+// Largely taken from:
+// https://github.com/DNedic/lockfree/blob/main/lockfree/spsc/ring_buf.hpp
+template <size_t min_capacity>
 class SPSCQueue
 {
-    static_assert(capacity >= 2, "capacity must be >= 2");
+    static_assert(min_capacity >= 2, "min_capacity must be >= 2");
 
-    static constexpr size_t _capacity = std::bit_ceil(capacity);
+    // Use the closest power of two larger or equal to min_capacity as the
+    // queue capacity to allow for efficient index wrapping
+    static constexpr size_t _capacity = std::bit_ceil(min_capacity);
     static constexpr size_t _wrap_mask = _capacity - 1;
     static constexpr size_t _cache_line_len
         = std::hardware_destructive_interference_size;
 
   public:
-    bool push(const T& value)
-    {
-        const size_t write = _w.load(std::memory_order_relaxed);
-        const size_t read = _r.load(std::memory_order_acquire);
+    bool push(const std::byte* data, const size_t size);
 
-        size_t write_next = (write + 1) & _wrap_mask;
-        if (write_next == read)
-            return false;
+    bool pop(std::byte* data, const size_t size);
 
-        _buffer[write] = value;
-
-        _w.store(write_next, std::memory_order_release);
-
-        return true;
-    }
-
-    bool push(T&& value)
-    {
-        const size_t write = _w.load(std::memory_order_relaxed);
-        const size_t read = _r.load(std::memory_order_acquire);
-
-        size_t write_next = (write + 1) & _wrap_mask;
-        if (write_next == read)
-            return false; // Queue is full
-
-        _buffer[write] = std::move(value);
-
-        _w.store(write_next, std::memory_order_release);
-
-        return true;
-    }
-
-    bool pop(T& value)
-    {
-        const size_t write = _w.load(std::memory_order_acquire);
-        size_t read = _r.load(std::memory_order_acquire);
-
-        if (write == read)
-            return false; // Queue is empty
-
-        value = std::move(_buffer[read]);
-
-        read = (read + 1) & _wrap_mask;
-        _r.store(read, std::memory_order_release);
-
-        return true;
-    }
-
-    std::optional<T> pop()
-    {
-        const size_t write = _w.load(std::memory_order_acquire);
-        size_t read = _r.load(std::memory_order_relaxed);
-
-        if (write == read)
-            return {}; // Queue is empty
-
-        T value = std::move(_buffer[read]);
-
-        read = (read + 1) & _wrap_mask;
-        _r.store(read, std::memory_order_release);
-
-        return std::move(value);
-    }
+    // Read directly into T
+    template <typename T>
+    bool pop(T& value);
 
   private:
-    T _buffer[_capacity];
+    size_t free_to_write(const size_t read, const size_t write) const;
+
+    size_t available_to_read(const size_t read, const size_t write) const;
+
+  private:
+    std::byte _buffer[_capacity];
     alignas(_cache_line_len) std::atomic<size_t> _r{ 0 };
     alignas(_cache_line_len) std::atomic<size_t> _w{ 0 };
 };
