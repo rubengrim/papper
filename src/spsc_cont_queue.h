@@ -100,6 +100,44 @@ class SPSCContQueue
         return true;
     }
 
+    // Read (memcpy) directly into T
+    template <typename T>
+    bool pop(T& value)
+    {
+        const size_t size = sizeof(T);
+        const size_t write = _w.load(std::memory_order_acquire);
+        size_t read = _r.load(std::memory_order_relaxed);
+
+        if (size > available_to_read(read, write))
+            return false; // Not enough to read
+
+        if (read + size <= _capacity)
+        {
+            // Data does not wrap so read linearly
+            std::memcpy(&value, _buffer + read, size);
+            read = (read + 1) & _wrap_mask;
+        }
+        else
+        {
+            // Read until the end of _buffer, then wrap to beginning and read
+            // remaining
+            const size_t to_end_of_buffer = _capacity - read;
+            std::memcpy(value, _buffer + read, to_end_of_buffer);
+            const size_t remaining = size - to_end_of_buffer;
+            // reinterpret_cast to byte buffer so that pointer arithmetics
+            // operate on byte level
+            std::memcpy(reinterpret_cast<std::byte*>(&value)
+                            + to_end_of_buffer,
+                        _buffer,
+                        remaining);
+            read = remaining;
+        }
+
+        _r.store(read, std::memory_order_release);
+
+        return true;
+    }
+
   private:
     std::byte _buffer[_capacity];
     alignas(_cache_line_len) std::atomic<size_t> _r{ 0 };

@@ -10,9 +10,9 @@
 #include <utility>
 
 /**
-* Wait-free and thread-safe spsc queue.
-* True capacity is capacity-1 for implementation reasons.
-*/
+ * Wait-free and thread-safe spsc queue.
+ * True capacity is capacity-1 for implementation reasons.
+ */
 template <typename T, size_t capacity>
 class SPSCQueue
 {
@@ -90,8 +90,8 @@ class SPSCQueue
 
   private:
     T _buffer[_capacity];
-    alignas(_cache_line_len) std::atomic<size_t> _r { 0 };
-    alignas(_cache_line_len) std::atomic<size_t> _w { 0 };
+    alignas(_cache_line_len) std::atomic<size_t> _r{ 0 };
+    alignas(_cache_line_len) std::atomic<size_t> _w{ 0 };
 };
 
 #endif
