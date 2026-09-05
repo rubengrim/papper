@@ -3,5 +3,5 @@ CompileFlags:
     -Wall,
     -Wextra,
     -pedantic,
-    -std=c++23,
+    -std=c++20,
   ]
