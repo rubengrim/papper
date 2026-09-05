@@ -6,6 +6,8 @@ IMPORTANT
 
 - Figure out Codec for arrays in general. const char* works because they are static, so we can just write the pointer to the queue and it's guaranteed to exist on the consumer side. But for other arrays we might need to deep copy. How do other libraries handle this? How does std::print handle it? Should I support it?
 
+- Get rid of main.cpp and introduce core.h instead. Figure out how libraries are typically set up with include/ dir, CMakeLists.txt, etc.
+
 LESS IMPORTANT
 
 - Write README.md
