@@ -1,0 +1,19 @@
+IMPORTANT
+
+- Make log() construct it's own call site local queue, and register that queue to the background thread somehow. Figure out how the background thread should be started. When the first log() is called, or by a papper::init() function?
+
+- Collect and output metadata at each log call site, such as filename, line number, clock time. Send via queue or store in a global hash map?
+
+- Figure out Codec for arrays in general. const char* works because they are static, so we can just write the pointer to the queue and it's guaranteed to exist on the consumer side. But for other arrays we might need to deep copy. How do other libraries handle this? How does std::print handle it? Should I support it?
+
+LESS IMPORTANT
+
+- Write README.md
+
+- Add more Codecs
+
+- Switch to {fmt}
+
+- Benchmark agains fmtlib, Quill and spdlog
+
+- Write tests (catch2?)

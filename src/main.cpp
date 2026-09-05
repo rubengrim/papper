@@ -66,40 +66,45 @@ void log(QueueType& q, const char* fmt_str, Args&&... args)
 
 int main()
 {
-    using QueueType = SPSCQueue<1000000>; // 1Mb
-    QueueType q;
+    // using QueueType = SPSCQueue<1000000>; // 1Mb
+    // QueueType q;
 
-    std::thread t_logger([&q]() {
-        const std::byte* buffer = nullptr;
-        while (true)
-        {
-            buffer = q.reserve_read(sizeof(LogEventHeader));
-            if (buffer != nullptr)
-            {
-                LogEventHeader header;
-                Codec<LogEventHeader>::decode(buffer, header);
-                q.commit_read();
-                buffer = q.reserve_read(header.payload_size);
+    // std::thread t_logger([&q]() {
+    //     const std::byte* buffer = nullptr;
+    //     while (true)
+    //     {
+    //         buffer = q.reserve_read(sizeof(LogEventHeader));
+    //         if (buffer != nullptr)
+    //         {
+    //             LogEventHeader header;
+    //             Codec<LogEventHeader>::decode(buffer, header);
+    //             q.commit_read();
+    //             buffer = q.reserve_read(header.payload_size);
 
-                std::string formatted_output;
-                header.decoding_fn(header.fmt_str, buffer, formatted_output);
-                q.commit_read();
+    //             std::string formatted_output;
+    //             header.decoding_fn(header.fmt_str, buffer,
+    //             formatted_output); q.commit_read();
 
-                std::cout << formatted_output << std::endl;
-            }
-        }
-    });
+    //             std::cout << formatted_output << std::endl;
+    //         }
+    //     }
+    // });
 
-    std::thread t_producer([&q]() {
-        uint32_t i = 0;
-        while (i++ < 10000)
-        {
-            log(q, "hej {}", std::vector<int>{ 1, 2 });
-        }
-    });
+    // std::thread t_producer([&q]() {
+    //     uint32_t i = 0;
+    //     while (i++ < 10000)
+    //     {
+    //         log(q, "hej {}", std::vector<int>{ 1, 2 });
+    //     }
+    // });
 
-    t_logger.join();
-    t_producer.join();
+    // t_logger.join();
+    // t_producer.join();
+
+    std::cout << std::is_same_v<std::remove_cvref_t<int[20]>, int[20]>
+              << std::endl;
+
+    std::cout << std::is_trivially_copyable_v<int[20]> << std::endl;
 
     return 0;
 }
