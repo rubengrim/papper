@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstring>
 #include <format>
+#include <iostream>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -20,6 +21,13 @@ namespace papper::core
 
 using namespace codec;
 using namespace queue;
+
+namespace defaults
+{
+
+inline size_t queue_size = 1048576; // 1Mb
+
+}
 
 template <typename... Args>
 void decode_and_format(const char* fmt_str, const std::byte* args_data,
@@ -54,7 +62,10 @@ struct LogEventHeader
 class ThreadContext
 {
   public:
-    ThreadContext() : _q{ 1000000 }, _is_alive{ true } {}
+    ThreadContext(const size_t queue_size)
+        : _q{ queue_size }, _is_alive{ true }
+    {
+    }
 
     Queue& get_queue()
     {
@@ -105,8 +116,8 @@ class Backend
         }
         if (_log_file)
         {
-            fflush(_log_file);
-            fclose(_log_file);
+            fflush(stdout);
+            fclose(stdout);
         }
     }
 
@@ -176,8 +187,8 @@ class Backend
         header.decoding_fn(header.fmt_str, buffer, formatted_output);
         q.commit_read();
 
-        fwrite(formatted_output.data(), 1, formatted_output.size(), _log_file);
-        fputc('\n', _log_file);
+        fwrite(formatted_output.data(), 1, formatted_output.size(), stdout);
+        fputc('\n', stdout);
 
         return true;
     }
@@ -213,6 +224,7 @@ class Backend
 
     Backend()
     {
+        std::cout << "Backend()" << std::endl;
         _log_file = fopen("papper.log", "a");
         setvbuf(_log_file, nullptr, _IOFBF, 65536);
 
@@ -258,7 +270,8 @@ class Backend
 class ThreadContextHandler
 {
   public:
-    ThreadContextHandler() : _context{ new ThreadContext }
+    ThreadContextHandler(const size_t queue_size)
+        : _context{ new ThreadContext(queue_size) }
     {
         Backend::get_instance().register_thread(_context);
     }
@@ -280,9 +293,10 @@ class ThreadContextHandler
     ThreadContext* _context;
 };
 
-inline Queue& get_thread_queue()
+inline Queue& get_or_create_thread_queue(const size_t queue_size
+                                         = defaults::queue_size)
 {
-    static thread_local ThreadContextHandler context_handler;
+    static thread_local ThreadContextHandler context_handler(queue_size);
     return context_handler.get_queue();
 }
 

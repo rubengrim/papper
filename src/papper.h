@@ -8,15 +8,23 @@ namespace papper
 
 using namespace core;
 
-inline void allocate()
+// Sets the default queue size for threads created in the future.
+// Can still be overridden by allocate()
+// Will NOT reallocate/touch existing thread queues.
+inline void set_default_queue_size(const size_t queue_size)
 {
-    get_thread_queue();
+    defaults::queue_size = queue_size;
+}
+
+inline void allocate(const size_t queue_size = defaults::queue_size)
+{
+    get_or_create_thread_queue(queue_size);
 }
 
 template <typename... Args>
 void log(const char* fmt_str, Args&&... args)
 {
-    Queue& q = get_thread_queue();
+    Queue& q = get_or_create_thread_queue();
 
     size_t total_args_size
         = (Codec<std::remove_cvref_t<Args>>::encoded_size(args) + ...);
