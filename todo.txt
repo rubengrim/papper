@@ -8,6 +8,8 @@ IMPORTANT
 
 - Get rid of main.cpp and introduce core.h instead. Figure out how libraries are typically set up with include/ dir, CMakeLists.txt, etc.
 
+- Heap allocate queue buffer
+
 LESS IMPORTANT
 
 - Write README.md

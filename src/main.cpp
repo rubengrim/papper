@@ -1,68 +1,6 @@
-#include <cstring>
-#include <format>
 #include <iostream>
-#include <string>
-#include <thread>
-#include <vector>
 
-#include "codec.h"
-#include "queue.h"
-
-// Should be aligned?
-struct LogEventHeader
-{
-    const char* fmt_str = "";
-    size_t payload_size;
-    void (*decoding_fn)(const char*, const std::byte*, std::string&);
-};
-
-template <typename QueueType, typename... Args>
-void decode_and_format(const char* fmt_str, const std::byte* args_data,
-                       std::string& formatted_output)
-{
-    using ArgsTuple = std::tuple<Args...>;
-    ArgsTuple args;
-
-    // Decode arguments into tuple
-    [&]<size_t... Is>(std::index_sequence<Is...>) {
-        (Codec<std::tuple_element_t<Is, ArgsTuple>>::decode(
-             args_data, std::get<Is>(args)),
-         ...);
-    }(std::index_sequence_for<Args...>{});
-
-    // Format
-    std::apply(
-        [&](auto&&... v) {
-            formatted_output
-                = std::vformat(fmt_str, std::make_format_args(v...));
-        },
-        args);
-}
-
-template <typename QueueType, typename... Args>
-void log(QueueType& q, const char* fmt_str, Args&&... args)
-{
-    size_t total_args_size
-        = (Codec<std::remove_cvref_t<Args>>::encoded_size(args) + ...);
-    size_t header_plus_args_size = total_args_size + sizeof(LogEventHeader);
-
-    LogEventHeader header;
-    header.fmt_str = fmt_str;
-    header.payload_size = total_args_size;
-    header.decoding_fn
-        = &decode_and_format<QueueType, std::remove_cvref_t<Args>...>;
-
-    std::byte* buffer = q.reserve_write(header_plus_args_size);
-    if (buffer == nullptr)
-        return; // Not enough queue space, drop the event
-
-    // Encode header
-    Codec<LogEventHeader>::encode(buffer, header);
-    // Encode args
-    ((Codec<std::remove_cvref_t<Args>>::encode(buffer, args)), ...);
-
-    q.commit_write();
-}
+#include "core.h"
 
 int main()
 {
@@ -94,17 +32,21 @@ int main()
     //     uint32_t i = 0;
     //     while (i++ < 10000)
     //     {
-    //         log(q, "hej {}", std::vector<int>{ 1, 2 });
+    //         log(q, "hej {}", std::to_string(i));
     //     }
     // });
 
     // t_logger.join();
     // t_producer.join();
 
-    std::cout << std::is_same_v<std::remove_cvref_t<int[20]>, int[20]>
-              << std::endl;
+    uint32_t i = 0;
+    while (i++ < 100)
+    {
+        log<SPSCQueue<100000>>("hej {}", std::to_string(i));
+    }
 
-    std::cout << std::is_trivially_copyable_v<int[20]> << std::endl;
+    // std::string a;
+    // std::getline(std::cin, a);
 
     return 0;
 }
