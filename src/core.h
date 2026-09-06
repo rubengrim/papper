@@ -3,9 +3,9 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <format>
-#include <iostream>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -48,7 +48,7 @@ void decode_and_format(const char* fmt_str, const std::byte* args_data,
 class ThreadContext
 {
   public:
-    ThreadContext() : _q{ 100000 }, _is_alive{ true } {}
+    ThreadContext() : _q{ 1000000 }, _is_alive{ true } {}
 
     Queue& get_queue()
     {
@@ -97,6 +97,11 @@ class LogBackend
         {
             _backend_thread.join();
         }
+        if (_log_file)
+        {
+            fflush(_log_file);
+            fclose(_log_file);
+        }
     }
 
   public:
@@ -114,7 +119,7 @@ class LogBackend
     }
 
   private:
-    static bool try_process_log_event(Queue& q)
+    bool try_process_log_event(Queue& q)
     {
         const std::byte* buffer = q.reserve_read(sizeof(LogEventHeader));
         if (buffer == nullptr)
@@ -129,7 +134,8 @@ class LogBackend
         header.decoding_fn(header.fmt_str, buffer, formatted_output);
         q.commit_read();
 
-        std::cout << formatted_output << std::endl;
+        fwrite(formatted_output.data(), 1, formatted_output.size(), _log_file);
+        fputc('\n', _log_file);
         return true;
     }
 
@@ -200,8 +206,12 @@ class LogBackend
 
     LogBackend()
     {
+        _log_file = fopen("papper.log", "a");
+        setvbuf(_log_file, nullptr, _IOFBF, 65536);
+
         _backend_thread = std::thread([this]() {
             uint64_t backoff_Ms = 1;
+            // TODO: Interface for user to change this
             constexpr uint64_t max_backoff_Ms = 1000;
 
             while (_running.load(std::memory_order_acquire))
@@ -235,6 +245,7 @@ class LogBackend
     std::mutex _mutex;
     std::atomic<ThreadContextNode*> _head{ nullptr };
     std::thread _backend_thread;
+    FILE* _log_file{ nullptr };
 };
 
 class ThreadContextHandler
