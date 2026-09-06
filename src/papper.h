@@ -2,11 +2,27 @@
 #define _PAPPER_H_
 
 #include "core.h"
+#include <exception>
 
 namespace papper
 {
 
 using namespace core;
+
+inline void set_sink(FILE* sink)
+{
+    Backend::get_or_create_instance().set_sink(sink);
+}
+
+[[nodiscard]] inline int set_sink(const char* filename, bool truncate = false)
+{
+    FILE* new_sink = fopen(filename, truncate ? "w" : "a");
+    if (!new_sink)
+        return errno;
+
+    set_sink(new_sink);
+    return 0;
+}
 
 // Sets the default queue size for threads created in the future.
 // Can still be overridden by allocate()

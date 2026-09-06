@@ -8,7 +8,7 @@
 #include <format>
 #include <iostream>
 #include <memory>
-#include <mutex>
+
 #include <string>
 #include <thread>
 #include <vector>
@@ -96,7 +96,7 @@ struct ThreadContextNode
 class Backend
 {
   public:
-    static Backend& get_instance()
+    static Backend& get_or_create_instance()
     {
         static Backend instance{};
         return instance;
@@ -114,10 +114,17 @@ class Backend
         {
             _backend_thread.join();
         }
-        if (_log_file)
+
+        // Apply any pending sink that wasn't picked up before shutdown
+        switch_to_new_sink();
+
+        if (_sink)
         {
-            fflush(stdout);
-            fclose(stdout);
+            fflush(_sink);
+            if (_sink != stdout && _sink != stderr)
+            {
+                fclose(_sink);
+            }
         }
     }
 
@@ -135,7 +142,40 @@ class Backend
         }
     }
 
+    void set_sink(FILE* sink)
+    {
+        if (sink == nullptr)
+            return;
+
+        // Set _new_sink and if there already was a value there, close that
+        // previous one
+        FILE* prev_new = _new_sink.exchange(sink, std::memory_order_acq_rel);
+        if (prev_new != nullptr && prev_new != stdout && prev_new != stderr)
+        {
+            fclose(prev_new);
+        }
+    }
+
   private:
+    void switch_to_new_sink()
+    {
+        FILE* new_sink
+            = _new_sink.exchange(nullptr, std::memory_order_acq_rel);
+        if (new_sink != nullptr)
+        {
+            fflush(_sink);
+            if (_sink != stdout && _sink != stderr)
+            {
+                fclose(_sink);
+            }
+            _sink = new_sink;
+            if (_sink == stdout || _sink == stderr)
+                setvbuf(_sink, nullptr, _IOLBF, 65536);
+            else
+                setvbuf(_sink, nullptr, _IOFBF, 65536);
+        }
+    }
+
     // May ONLY be called by the backend thread
     void remove_and_delete_node(ThreadContextNode* node)
     {
@@ -187,8 +227,8 @@ class Backend
         header.decoding_fn(header.fmt_str, buffer, formatted_output);
         q.commit_read();
 
-        fwrite(formatted_output.data(), 1, formatted_output.size(), stdout);
-        fputc('\n', stdout);
+        fwrite(formatted_output.data(), 1, formatted_output.size(), _sink);
+        fputc('\n', _sink);
 
         return true;
     }
@@ -210,9 +250,6 @@ class Backend
                     // are no events left in the queue to process
                     remove_and_delete_node(node);
                 }
-
-                // Nothing more to read from this queue
-                break;
             }
 
             n_events_processed += 1;
@@ -224,10 +261,10 @@ class Backend
 
     Backend()
     {
-        std::cout << "Backend()" << std::endl;
-        _log_file = fopen("papper.log", "a");
-        setvbuf(_log_file, nullptr, _IOFBF, 65536);
+        // setvbuf(_sink, nullptr, _IOFBF, 65536);
+        setvbuf(_sink, nullptr, _IOLBF, 65536);
 
+        _running.store(true, std::memory_order_relaxed);
         _backend_thread = std::thread([this]() {
             uint64_t backoff_Ms = 1;
             // TODO: Interface for user to change this
@@ -235,6 +272,8 @@ class Backend
 
             while (_running.load(std::memory_order_acquire))
             {
+                switch_to_new_sink();
+
                 if (poll_threads_once() > 0)
                 {
                     // Reset backoff if there were events to process
@@ -254,26 +293,28 @@ class Backend
             // deleted
             while (_head.load(std::memory_order_acquire) != nullptr)
             {
+                switch_to_new_sink();
                 poll_threads_once();
             }
         });
     }
 
   private:
-    std::atomic<bool> _running{ true };
-    std::mutex _mutex;
-    std::atomic<ThreadContextNode*> _head{ nullptr };
+    std::atomic<bool> _running = false;
+    std::atomic<FILE*> _new_sink = nullptr;
+    FILE* _sink
+        = stdout; // Only accessed by the backend thread (and dtor after join)
+    std::atomic<ThreadContextNode*> _head = nullptr;
     std::thread _backend_thread;
-    FILE* _log_file{ nullptr };
 };
 
 class ThreadContextHandler
 {
   public:
     ThreadContextHandler(const size_t queue_size)
-        : _context{ new ThreadContext(queue_size) }
+        : _context{ new ThreadContext{ queue_size } }
     {
-        Backend::get_instance().register_thread(_context);
+        Backend::get_or_create_instance().register_thread(_context);
     }
 
     ~ThreadContextHandler()
