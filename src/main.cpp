@@ -40,9 +40,10 @@ int main()
     // t_producer.join();
 
     uint32_t i = 0;
-    while (i++ < 100)
+    while (i++ < 10000000)
     {
         log("hej {}", std::to_string(i));
+        // printf("hej %s\n", std::to_string(i).c_str());
     }
 
     // std::string a;

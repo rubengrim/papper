@@ -2,6 +2,7 @@
 #define _CORE_H_
 
 #include <atomic>
+#include <chrono>
 #include <cstring>
 #include <format>
 #include <iostream>
@@ -75,26 +76,26 @@ struct ThreadContextNode
     ThreadContextNode* next{ nullptr };
 };
 
-class Logger
+class LogBackend
 {
   public:
-    static Logger& get_instance()
+    static LogBackend& get_instance()
     {
-        static Logger instance{};
+        static LogBackend instance{};
         return instance;
     }
 
-    Logger(const Logger&) = delete;
-    Logger(Logger&&) = delete;
-    Logger& operator=(const Logger&) = delete;
-    Logger& operator=(Logger&&) = delete;
+    LogBackend(const LogBackend&) = delete;
+    LogBackend(LogBackend&&) = delete;
+    LogBackend& operator=(const LogBackend&) = delete;
+    LogBackend& operator=(LogBackend&&) = delete;
 
-    ~Logger()
+    ~LogBackend()
     {
         _running.store(false, std::memory_order_release);
-        if (_polling_thread.joinable())
+        if (_backend_thread.joinable())
         {
-            _polling_thread.join();
+            _backend_thread.join();
         }
     }
 
@@ -132,7 +133,7 @@ class Logger
         return true;
     }
 
-    // May ONLY be called by polling thread
+    // May ONLY be called by backend thread
     void remove_and_delete_node(ThreadContextNode* node)
     {
         if (node == nullptr)
@@ -168,43 +169,56 @@ class Logger
         delete node;
     }
 
-    void poll_threads_once()
+    int poll_threads_once()
     {
+        int n_events_processed = 0;
         ThreadContextNode* node = _head.load(std::memory_order_acquire);
         while (node != nullptr)
         {
             ThreadContextNode* next = node->next;
 
-            // Will attempt at most this number of successive reads per thread
-            static constexpr int max_successive_queue_reads = 10;
-
-            for (int i = 0; i < max_successive_queue_reads; ++i)
+            if (!try_process_log_event(node->context->get_queue()))
             {
-                if (!try_process_log_event(node->context->get_queue()))
+                if (!node->context->thread_is_alive())
                 {
-                    if (!node->context->thread_is_alive())
-                    {
-                        // Delete and remove the node+context from the
-                        // list if the thread has been killed and there
-                        // are no events left in the queue to process
-                        remove_and_delete_node(node);
-                    }
-
-                    // Nothing more to read from this queue
-                    break;
+                    // Delete and remove the node+context from the
+                    // list if the thread has been killed and there
+                    // are no events left in the queue to process
+                    remove_and_delete_node(node);
                 }
+
+                // Nothing more to read from this queue
+                break;
             }
 
+            n_events_processed += 1;
             node = next;
         }
+
+        return n_events_processed;
     }
 
-    Logger()
+    LogBackend()
     {
-        _polling_thread = std::thread([this]() {
+        _backend_thread = std::thread([this]() {
+            uint64_t backoff_Ms = 1;
+            constexpr uint64_t max_backoff_Ms = 1000;
+
             while (_running.load(std::memory_order_acquire))
             {
-                poll_threads_once();
+                if (poll_threads_once() > 0)
+                {
+                    // Reset backoff if there were events to process
+                    backoff_Ms = 1;
+                }
+                else
+                {
+                    // Double backoff each time there were no events up to
+                    // max_backoff
+                    std::this_thread::sleep_for(
+                        std::chrono::microseconds(backoff_Ms));
+                    backoff_Ms = std::min(backoff_Ms * 2, max_backoff_Ms);
+                }
             }
 
             // Poll remaining events until all thread queues are emptied and
@@ -220,7 +234,7 @@ class Logger
     std::atomic<bool> _running{ true };
     std::mutex _mutex;
     std::atomic<ThreadContextNode*> _head{ nullptr };
-    std::thread _polling_thread;
+    std::thread _backend_thread;
 };
 
 class ThreadContextHandler
@@ -228,7 +242,7 @@ class ThreadContextHandler
   public:
     ThreadContextHandler() : _context{ new ThreadContext }
     {
-        Logger::get_instance().register_thread(_context);
+        LogBackend::get_instance().register_thread(_context);
     }
 
     ~ThreadContextHandler()
