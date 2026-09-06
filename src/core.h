@@ -21,7 +21,7 @@ struct LogEventHeader
     void (*decoding_fn)(const char*, const std::byte*, std::string&);
 };
 
-template <typename QueueType, typename... Args>
+template <typename... Args>
 void decode_and_format(const char* fmt_str, const std::byte* args_data,
                        std::string& formatted_output)
 {
@@ -44,13 +44,37 @@ void decode_and_format(const char* fmt_str, const std::byte* args_data,
         args);
 }
 
-template <typename QueueType>
-struct ThreadContext;
+class ThreadContext
+{
+  public:
+    ThreadContext() : _q{ 100000 }, _is_alive{ true } {}
 
-template <typename QueueType>
-class ThreadContextWrapper;
+    Queue& get_queue()
+    {
+        return _q;
+    }
 
-template <typename QueueType>
+    bool thread_is_alive()
+    {
+        return _is_alive.load(std::memory_order_acquire);
+    }
+
+    void kill()
+    {
+        _is_alive.store(false, std::memory_order_release);
+    }
+
+  private:
+    Queue _q;
+    std::atomic<bool> _is_alive;
+};
+
+struct ThreadContextNode
+{
+    ThreadContext* context;
+    ThreadContextNode* next{ nullptr };
+};
+
 class Logger
 {
   public:
@@ -68,27 +92,32 @@ class Logger
     ~Logger()
     {
         _running.store(false, std::memory_order_release);
-        if (poll_thread.joinable())
+        if (_polling_thread.joinable())
         {
-            poll_thread.join();
+            _polling_thread.join();
         }
     }
 
   public:
-    void register_thread(std::shared_ptr<ThreadContext<QueueType>> context)
+    void register_thread(ThreadContext* context)
     {
-        std::lock_guard<std::mutex> guard{ _mutex };
-        _contexts.push_back(context);
+        ThreadContextNode* node = new ThreadContextNode;
+        node->context = context;
+        node->next = _head.load(std::memory_order_relaxed);
+        while (!_head.compare_exchange_weak(node->next,
+                                            node,
+                                            std::memory_order_release,
+                                            std::memory_order_relaxed))
+        {
+        }
     }
 
   private:
-    static bool process_log(QueueType& q)
+    static bool try_process_log_event(Queue& q)
     {
         const std::byte* buffer = q.reserve_read(sizeof(LogEventHeader));
         if (buffer == nullptr)
-        {
-            return false;
-        }
+            return false; // Nothing to read
 
         LogEventHeader header;
         Codec<LogEventHeader>::decode(buffer, header);
@@ -103,51 +132,86 @@ class Logger
         return true;
     }
 
-    Logger()
+    // May ONLY be called by polling thread
+    void remove_and_delete_node(ThreadContextNode* node)
     {
-        poll_thread = std::thread([this]() {
-            while (_running.load(std::memory_order_acquire))
+        if (node == nullptr)
+            return;
+
+        // If node is head, set head to node->next and delete node
+        ThreadContextNode* expected = node;
+        if (_head.compare_exchange_strong(expected,
+                                          node->next,
+                                          std::memory_order_release,
+                                          std::memory_order_relaxed))
+        {
+            delete node->context;
+            delete node;
+
+            return;
+        }
+
+        ThreadContextNode* current = expected;
+        ThreadContextNode* previous = nullptr;
+        while (current != nullptr && current != node)
+        {
+            previous = current;
+            current = current->next;
+        }
+
+        if (current == nullptr)
+            return; // node was not found in list
+
+        previous->next = current->next;
+
+        delete node->context;
+        delete node;
+    }
+
+    void poll_threads_once()
+    {
+        ThreadContextNode* node = _head.load(std::memory_order_acquire);
+        while (node != nullptr)
+        {
+            ThreadContextNode* next = node->next;
+
+            // Will attempt at most this number of successive reads per thread
+            static constexpr int max_successive_queue_reads = 10;
+
+            for (int i = 0; i < max_successive_queue_reads; ++i)
             {
-                bool processed = false;
+                if (!try_process_log_event(node->context->get_queue()))
                 {
-                    std::lock_guard<std::mutex> guard{ _mutex };
-                    for (auto it = _contexts.begin(); it != _contexts.end();)
+                    if (!node->context->thread_is_alive())
                     {
-                        if (process_log((*it)->q))
-                        {
-                            processed = true;
-                            ++it;
-                        }
-                        else if (!(*it)->is_alive.load(
-                                     std::memory_order_acquire))
-                        {
-                            it = _contexts.erase(it);
-                        }
-                        else
-                        {
-                            ++it;
-                        }
+                        // Delete and remove the node+context from the
+                        // list if the thread has been killed and there
+                        // are no events left in the queue to process
+                        remove_and_delete_node(node);
                     }
-                }
-                if (!processed)
-                {
-                    std::this_thread::yield();
+
+                    // Nothing more to read from this queue
+                    break;
                 }
             }
 
-            // Drain remaining logs upon shutdown
-            bool has_more = true;
-            while (has_more)
+            node = next;
+        }
+    }
+
+    Logger()
+    {
+        _polling_thread = std::thread([this]() {
+            while (_running.load(std::memory_order_acquire))
             {
-                has_more = false;
-                std::lock_guard<std::mutex> guard{ _mutex };
-                for (auto& context : _contexts)
-                {
-                    while (process_log(context->q))
-                    {
-                        has_more = true;
-                    }
-                }
+                poll_threads_once();
+            }
+
+            // Poll remaining events until all thread queues are emptied and
+            // deleted
+            while (_head.load(std::memory_order_acquire) != nullptr)
+            {
+                poll_threads_once();
             }
         });
     }
@@ -155,56 +219,45 @@ class Logger
   private:
     std::atomic<bool> _running{ true };
     std::mutex _mutex;
-    std::vector<std::shared_ptr<ThreadContext<QueueType>>> _contexts;
-    std::thread poll_thread;
+    std::atomic<ThreadContextNode*> _head{ nullptr };
+    std::thread _polling_thread;
 };
 
-template <typename QueueType>
-struct ThreadContext
-{
-    QueueType q;
-    std::atomic<bool> is_alive{ true };
-};
-
-template <typename QueueType>
-class ThreadContextWrapper
+class ThreadContextHandler
 {
   public:
-    ThreadContextWrapper()
-        : _context{ std::make_shared<ThreadContext<QueueType>>() }
+    ThreadContextHandler() : _context{ new ThreadContext }
     {
-        std::cout << "Constructing ThreadContextWrapper" << std::endl;
-        Logger<QueueType>::get_instance().register_thread(_context);
+        Logger::get_instance().register_thread(_context);
     }
 
-    ~ThreadContextWrapper()
+    ~ThreadContextHandler()
     {
-        if (_context)
-        {
-            _context->is_alive.store(false, std::memory_order_release);
-        }
+        // Do not actually delete the context here, just mark it as dead and
+        // let the background thread delete it when all remaining queue events
+        // have been read
+        _context->kill();
     }
 
-    QueueType& get_queue()
+    Queue& get_queue()
     {
-        return _context->q;
+        return _context->get_queue();
     }
 
   private:
-    std::shared_ptr<ThreadContext<QueueType>> _context;
+    ThreadContext* _context;
 };
 
-template <typename QueueType>
-QueueType& get_thread_queue()
+inline Queue& get_thread_queue()
 {
-    static thread_local ThreadContextWrapper<QueueType> context_wrapper;
-    return context_wrapper.get_queue();
+    static thread_local ThreadContextHandler context_handler;
+    return context_handler.get_queue();
 }
 
-template <typename QueueType, typename... Args>
+template <typename... Args>
 void log(const char* fmt_str, Args&&... args)
 {
-    QueueType& q = get_thread_queue<QueueType>();
+    Queue& q = get_thread_queue();
 
     size_t total_args_size
         = (Codec<std::remove_cvref_t<Args>>::encoded_size(args) + ...);
@@ -213,8 +266,7 @@ void log(const char* fmt_str, Args&&... args)
     LogEventHeader header;
     header.fmt_str = fmt_str;
     header.payload_size = total_args_size;
-    header.decoding_fn
-        = &decode_and_format<QueueType, std::remove_cvref_t<Args>...>;
+    header.decoding_fn = &decode_and_format<std::remove_cvref_t<Args>...>;
 
     std::byte* buffer = q.reserve_write(header_plus_args_size);
     if (buffer == nullptr)

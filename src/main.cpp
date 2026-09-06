@@ -42,7 +42,7 @@ int main()
     uint32_t i = 0;
     while (i++ < 100)
     {
-        log<SPSCQueue<100000>>("hej {}", std::to_string(i));
+        log("hej {}", std::to_string(i));
     }
 
     // std::string a;
