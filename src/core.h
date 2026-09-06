@@ -15,12 +15,11 @@
 #include "codec.h"
 #include "queue.h"
 
-struct LogEventHeader
+namespace papper::core
 {
-    const char* fmt_str = "";
-    size_t payload_size;
-    void (*decoding_fn)(const char*, const std::byte*, std::string&);
-};
+
+using namespace codec;
+using namespace queue;
 
 template <typename... Args>
 void decode_and_format(const char* fmt_str, const std::byte* args_data,
@@ -44,6 +43,13 @@ void decode_and_format(const char* fmt_str, const std::byte* args_data,
         },
         args);
 }
+
+struct LogEventHeader
+{
+    const char* fmt_str = "";
+    size_t payload_size;
+    void (*decoding_fn)(const char*, const std::byte*, std::string&);
+};
 
 class ThreadContext
 {
@@ -76,21 +82,21 @@ struct ThreadContextNode
     ThreadContextNode* next{ nullptr };
 };
 
-class LogBackend
+class Backend
 {
   public:
-    static LogBackend& get_instance()
+    static Backend& get_instance()
     {
-        static LogBackend instance{};
+        static Backend instance{};
         return instance;
     }
 
-    LogBackend(const LogBackend&) = delete;
-    LogBackend(LogBackend&&) = delete;
-    LogBackend& operator=(const LogBackend&) = delete;
-    LogBackend& operator=(LogBackend&&) = delete;
+    Backend(const Backend&) = delete;
+    Backend(Backend&&) = delete;
+    Backend& operator=(const Backend&) = delete;
+    Backend& operator=(Backend&&) = delete;
 
-    ~LogBackend()
+    ~Backend()
     {
         _running.store(false, std::memory_order_release);
         if (_backend_thread.joinable())
@@ -119,27 +125,7 @@ class LogBackend
     }
 
   private:
-    bool try_process_log_event(Queue& q)
-    {
-        const std::byte* buffer = q.reserve_read(sizeof(LogEventHeader));
-        if (buffer == nullptr)
-            return false; // Nothing to read
-
-        LogEventHeader header;
-        Codec<LogEventHeader>::decode(buffer, header);
-        q.commit_read();
-
-        buffer = q.reserve_read(header.payload_size);
-        std::string formatted_output;
-        header.decoding_fn(header.fmt_str, buffer, formatted_output);
-        q.commit_read();
-
-        fwrite(formatted_output.data(), 1, formatted_output.size(), _log_file);
-        fputc('\n', _log_file);
-        return true;
-    }
-
-    // May ONLY be called by backend thread
+    // May ONLY be called by the backend thread
     void remove_and_delete_node(ThreadContextNode* node)
     {
         if (node == nullptr)
@@ -175,6 +161,27 @@ class LogBackend
         delete node;
     }
 
+    bool try_process_log_event(Queue& q)
+    {
+        const std::byte* buffer = q.reserve_read(sizeof(LogEventHeader));
+        if (buffer == nullptr)
+            return false; // Nothing to read
+
+        LogEventHeader header;
+        Codec<LogEventHeader>::decode(buffer, header);
+        q.commit_read();
+
+        buffer = q.reserve_read(header.payload_size);
+        std::string formatted_output;
+        header.decoding_fn(header.fmt_str, buffer, formatted_output);
+        q.commit_read();
+
+        fwrite(formatted_output.data(), 1, formatted_output.size(), _log_file);
+        fputc('\n', _log_file);
+
+        return true;
+    }
+
     int poll_threads_once()
     {
         int n_events_processed = 0;
@@ -204,7 +211,7 @@ class LogBackend
         return n_events_processed;
     }
 
-    LogBackend()
+    Backend()
     {
         _log_file = fopen("papper.log", "a");
         setvbuf(_log_file, nullptr, _IOFBF, 65536);
@@ -253,7 +260,7 @@ class ThreadContextHandler
   public:
     ThreadContextHandler() : _context{ new ThreadContext }
     {
-        LogBackend::get_instance().register_thread(_context);
+        Backend::get_instance().register_thread(_context);
     }
 
     ~ThreadContextHandler()
@@ -279,30 +286,6 @@ inline Queue& get_thread_queue()
     return context_handler.get_queue();
 }
 
-template <typename... Args>
-void log(const char* fmt_str, Args&&... args)
-{
-    Queue& q = get_thread_queue();
-
-    size_t total_args_size
-        = (Codec<std::remove_cvref_t<Args>>::encoded_size(args) + ...);
-    size_t header_plus_args_size = total_args_size + sizeof(LogEventHeader);
-
-    LogEventHeader header;
-    header.fmt_str = fmt_str;
-    header.payload_size = total_args_size;
-    header.decoding_fn = &decode_and_format<std::remove_cvref_t<Args>...>;
-
-    std::byte* buffer = q.reserve_write(header_plus_args_size);
-    if (buffer == nullptr)
-        return; // Not enough queue space, drop the event
-
-    // Encode header
-    Codec<LogEventHeader>::encode(buffer, header);
-    // Encode args
-    ((Codec<std::remove_cvref_t<Args>>::encode(buffer, args)), ...);
-
-    q.commit_write();
 }
 
 #endif

@@ -7,6 +7,9 @@
 #include <type_traits>
 #include <vector>
 
+namespace papper::codec
+{
+
 /*
  * Fallback for not supported types
  */
@@ -91,5 +94,7 @@ struct Codec<std::basic_string<CharT, Traits, Alloc>>
         buffer += byte_size;
     }
 };
+
+}
 
 #endif

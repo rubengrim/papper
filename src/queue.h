@@ -10,6 +10,9 @@
 #include <optional>
 #include <utility>
 
+namespace papper::queue
+{
+
 class Queue
 {
     static constexpr size_t _cache_line_len
@@ -142,5 +145,7 @@ class Queue
     size_t _future_write_pos = 0;
     size_t _future_read_pos = 0;
 };
+
+}
 
 #endif
