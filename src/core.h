@@ -1,7 +1,6 @@
 #ifndef _CORE_H_
 #define _CORE_H_
 
-#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -15,6 +14,7 @@
 
 #include "codec.h"
 #include "queue.h"
+#include "sink.h"
 
 namespace papper::core
 {
@@ -114,18 +114,6 @@ class Backend
         {
             _backend_thread.join();
         }
-
-        // Apply any pending sink that wasn't picked up before shutdown
-        switch_to_new_sink();
-
-        if (_sink)
-        {
-            fflush(_sink);
-            if (_sink != stdout && _sink != stderr)
-            {
-                fclose(_sink);
-            }
-        }
     }
 
   public:
@@ -142,40 +130,13 @@ class Backend
         }
     }
 
-    void set_sink(FILE* sink)
+    void queue_new_sink(FILE* file, const int buffering_mode,
+                        const size_t buffer_size)
     {
-        if (sink == nullptr)
-            return;
-
-        // Set _new_sink and if there already was a value there, close that
-        // previous one
-        FILE* prev_new = _new_sink.exchange(sink, std::memory_order_acq_rel);
-        if (prev_new != nullptr && prev_new != stdout && prev_new != stderr)
-        {
-            fclose(prev_new);
-        }
+        _sink.queue_new_sink(file, buffering_mode, buffer_size);
     }
 
   private:
-    void switch_to_new_sink()
-    {
-        FILE* new_sink
-            = _new_sink.exchange(nullptr, std::memory_order_acq_rel);
-        if (new_sink != nullptr)
-        {
-            fflush(_sink);
-            if (_sink != stdout && _sink != stderr)
-            {
-                fclose(_sink);
-            }
-            _sink = new_sink;
-            if (_sink == stdout || _sink == stderr)
-                setvbuf(_sink, nullptr, _IOLBF, 65536);
-            else
-                setvbuf(_sink, nullptr, _IOFBF, 65536);
-        }
-    }
-
     // May ONLY be called by the backend thread
     void remove_and_delete_node(ThreadContextNode* node)
     {
@@ -227,8 +188,7 @@ class Backend
         header.decoding_fn(header.fmt_str, buffer, formatted_output);
         q.commit_read();
 
-        fwrite(formatted_output.data(), 1, formatted_output.size(), _sink);
-        fputc('\n', _sink);
+        _sink.write(formatted_output);
 
         return true;
     }
@@ -261,19 +221,16 @@ class Backend
 
     Backend()
     {
-        // setvbuf(_sink, nullptr, _IOFBF, 65536);
-        setvbuf(_sink, nullptr, _IOLBF, 65536);
-
         _running.store(true, std::memory_order_relaxed);
         _backend_thread = std::thread([this]() {
             uint64_t backoff_Ms = 1;
             // TODO: Interface for user to change this
             constexpr uint64_t max_backoff_Ms = 1000;
 
+            _sink.poll_for_pending_sink_switch();
+
             while (_running.load(std::memory_order_acquire))
             {
-                switch_to_new_sink();
-
                 if (poll_threads_once() > 0)
                 {
                     // Reset backoff if there were events to process
@@ -293,7 +250,6 @@ class Backend
             // deleted
             while (_head.load(std::memory_order_acquire) != nullptr)
             {
-                switch_to_new_sink();
                 poll_threads_once();
             }
         });
@@ -301,10 +257,8 @@ class Backend
 
   private:
     std::atomic<bool> _running = false;
-    std::atomic<FILE*> _new_sink = nullptr;
-    FILE* _sink
-        = stdout; // Only accessed by the backend thread (and dtor after join)
     std::atomic<ThreadContextNode*> _head = nullptr;
+    sink::Sink _sink;
     std::thread _backend_thread;
 };
 
