@@ -1,5 +1,5 @@
-#ifndef _QUEUE2_H_
-#define _QUEUE2_H_
+#ifndef _PAPPER_QUEUE_H_
+#define _PAPPER_QUEUE_H_
 
 #include <atomic>
 #include <bit>

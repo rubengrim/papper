@@ -8,10 +8,10 @@
 namespace papper::sink
 {
 
-class Sink
+class SinkHandler
 {
   public:
-    ~Sink()
+    ~SinkHandler()
     {
         SinkDescriptor* pending
             = _pending_new_sink.exchange(nullptr, std::memory_order_acq_rel);
@@ -23,10 +23,37 @@ class Sink
         close_file(_file);
     }
 
+    // Can be called by any thread
+    void queue_new_sink(FILE* file, const int buffering_mode,
+                        const size_t buffer_size)
+    {
+        if (file == nullptr)
+            return;
+
+        SinkDescriptor* new_sink
+            = new SinkDescriptor{ file, buffering_mode, buffer_size };
+
+        SinkDescriptor* prev
+            = _pending_new_sink.exchange(new_sink, std::memory_order_acq_rel);
+        if (prev != nullptr)
+        {
+            close_file(prev->file);
+            delete prev;
+        }
+    }
+
     // May ONLY be called by the backend thread
     // Note: Does not check for pending sink switch, that must be handled
     // by caller
-    void write(const std::string_view& str)
+    void write(std::string_view str)
+    {
+        fwrite(str.data(), 1, str.size(), _file);
+    }
+
+    // May ONLY be called by the backend thread
+    // Note: Does not check for pending sink switch, that must be handled
+    // by caller
+    void write_str_and_endl(std::string_view str)
     {
         fwrite(str.data(), 1, str.size(), _file);
         fputc('\n', _file);
@@ -49,25 +76,6 @@ class Sink
                     new_sink->buffer_size);
 
             delete new_sink;
-        }
-    }
-
-    // Can be called by any thread
-    void queue_new_sink(FILE* file, const int buffering_mode,
-                        const size_t buffer_size)
-    {
-        if (file == nullptr)
-            return;
-
-        SinkDescriptor* new_sink
-            = new SinkDescriptor{ file, buffering_mode, buffer_size };
-
-        SinkDescriptor* prev
-            = _pending_new_sink.exchange(new_sink, std::memory_order_acq_rel);
-        if (prev != nullptr)
-        {
-            close_file(prev->file);
-            delete prev;
         }
     }
 

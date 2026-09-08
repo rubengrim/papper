@@ -1,5 +1,5 @@
-#ifndef _CORE_H_
-#define _CORE_H_
+#ifndef _PAPPER_CORE_H_
+#define _PAPPER_CORE_H_
 
 #include <chrono>
 #include <cstdio>
@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "codec.h"
+#include "prefix.h"
 #include "queue.h"
 #include "sink.h"
 
@@ -30,8 +31,7 @@ inline size_t queue_size = 1048576; // 1Mb
 }
 
 template <typename... Args>
-void decode_and_format(const char* fmt_str, const std::byte* args_data,
-                       std::string& formatted_output)
+std::string decode_and_format(const char* fmt_str, const std::byte* args_data)
 {
     using ArgsTuple = std::tuple<Args...>;
     ArgsTuple args;
@@ -44,10 +44,9 @@ void decode_and_format(const char* fmt_str, const std::byte* args_data,
     }(std::index_sequence_for<Args...>{});
 
     // Format
-    std::apply(
+    return std::apply(
         [&](auto&&... v) {
-            formatted_output
-                = std::vformat(fmt_str, std::make_format_args(v...));
+            return std::vformat(fmt_str, std::make_format_args(v...));
         },
         args);
 }
@@ -56,7 +55,8 @@ struct LogEventHeader
 {
     const char* fmt_str = "";
     size_t payload_size;
-    void (*decoding_fn)(const char*, const std::byte*, std::string&);
+    std::string (*decoding_fn)(const char*, const std::byte*);
+    prefix::LogEventMetadata metadata;
 };
 
 class ThreadContext
@@ -136,6 +136,11 @@ class Backend
         _sink.queue_new_sink(file, buffering_mode, buffer_size);
     }
 
+    void queue_new_prefix_formatter(prefix::PrefixFormatterBase* formatter)
+    {
+        _prefix_formatter.queue_new_formatter(formatter);
+    }
+
   private:
     // May ONLY be called by the backend thread
     void remove_and_delete_node(ThreadContextNode* node)
@@ -184,11 +189,13 @@ class Backend
         q.commit_read();
 
         buffer = q.reserve_read(header.payload_size);
-        std::string formatted_output;
-        header.decoding_fn(header.fmt_str, buffer, formatted_output);
+        std::string message = header.decoding_fn(header.fmt_str, buffer);
         q.commit_read();
 
-        _sink.write(formatted_output);
+        std::string prefix = _prefix_formatter.format(header.metadata);
+
+        _sink.write(prefix);
+        _sink.write_str_and_endl(message);
 
         return true;
     }
@@ -227,10 +234,11 @@ class Backend
             // TODO: Interface for user to change this
             constexpr uint64_t max_backoff_Ms = 1000;
 
-            _sink.poll_for_pending_sink_switch();
-
             while (_running.load(std::memory_order_acquire))
             {
+                _sink.poll_for_pending_sink_switch();
+                _prefix_formatter.poll_for_pending_formatter_switch();
+
                 if (poll_threads_once() > 0)
                 {
                     // Reset backoff if there were events to process
@@ -238,7 +246,7 @@ class Backend
                 }
                 else
                 {
-                    // Double backoff each time there were no events up to
+                    // Double the backoff each time there were no events, up to
                     // max_backoff
                     std::this_thread::sleep_for(
                         std::chrono::microseconds(backoff_Ms));
@@ -258,7 +266,8 @@ class Backend
   private:
     std::atomic<bool> _running = false;
     std::atomic<ThreadContextNode*> _head = nullptr;
-    sink::Sink _sink;
+    sink::SinkHandler _sink;
+    prefix::PrefixFormatterHandler _prefix_formatter;
     std::thread _backend_thread;
 };
 
@@ -273,7 +282,7 @@ class ThreadContextHandler
 
     ~ThreadContextHandler()
     {
-        // Do not actually delete the context here, just mark it as dead and
+        // Don't delete the context here, just mark it as dead and
         // let the background thread delete it when all remaining queue events
         // have been read
         _context->kill();

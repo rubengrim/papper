@@ -1,5 +1,5 @@
-#ifndef _CODECS_H_
-#define _CODECS_H_
+#ifndef _PAPPER_CODEC_H_
+#define _PAPPER_CODEC_H_
 
 #include <cstddef>
 #include <cstring>
