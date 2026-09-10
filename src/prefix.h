@@ -14,16 +14,18 @@
 #include <unordered_map>
 #include <utility>
 
+#include "level.h"
+
 namespace papper::prefix
 {
 
 struct LogEventMetadata
 {
+    Level level;
     std::chrono::time_point<std::chrono::system_clock> timestamp;
     std::string_view filename;
     std::string_view functionname;
     uint32_t linenumber;
-    uint8_t level;
 };
 
 // https://blog.ganets.ky/StaticString/
@@ -44,11 +46,11 @@ StaticString(const char (&)[N]) -> StaticString<N>;
 
 enum class PrefixField
 {
+    Level,
     Time,
     File,
     Function,
     Line,
-    Level,
 };
 
 constexpr bool name_to_field_enum(std::string_view name, PrefixField& field)
@@ -122,7 +124,7 @@ consteval bool validate_field_spec_combination(PrefixField field,
             return true;
     }
 
-    // If not timestamp, only None is a valid spec
+    // If not one of the above, only None is valid spec
     if (spec == PrefixFieldFormatSpec::None)
         return true;
 
@@ -304,7 +306,28 @@ consteval auto parse_pattern()
         ++i;
     }
 
+    // Push a final space to separate prefix from message
+    push_char(' ');
     return result;
+}
+
+// TODO: Remove this function and just write a custom formatter for
+// papper::Level
+constexpr std::string_view level_to_name(Level level)
+{
+    switch (level)
+    {
+    case Level::Trace:
+        return "TRACE";
+    case Level::Debug:
+        return "DEBUG";
+    case Level::Info:
+        return "INFO";
+    case Level::Warn:
+        return "WARN";
+    case Level::Error:
+        return "ERROR";
+    }
 }
 
 // Note to me in the future: decltype(auto) combined with return ()
@@ -313,7 +336,9 @@ consteval auto parse_pattern()
 template <PrefixField Field>
 constexpr decltype(auto) get_field(const LogEventMetadata& rec)
 {
-    if constexpr (Field == PrefixField::Time)
+    if constexpr (Field == PrefixField::Level)
+        return (level_to_name(rec.level));
+    else if constexpr (Field == PrefixField::Time)
         return (rec.timestamp);
     else if constexpr (Field == PrefixField::File)
         return (rec.filename);
@@ -321,8 +346,6 @@ constexpr decltype(auto) get_field(const LogEventMetadata& rec)
         return (rec.functionname);
     else if constexpr (Field == PrefixField::Line)
         return (rec.linenumber);
-    else if constexpr (Field == PrefixField::Level)
-        return (rec.level);
     else
         static_assert(false,
                       "field is invalid"); // Should be unreachable
@@ -431,7 +454,9 @@ class PrefixFormatterHandler
   public:
     PrefixFormatterHandler()
     {
-        _formatter = new PrefixFormatter<"[{function}] ">;
+        // Set default pattern
+        _formatter = new PrefixFormatter<
+            "[{time:HMSf}] [{level}] [{file:nameonly}:{line}]">;
     }
 
     ~PrefixFormatterHandler()

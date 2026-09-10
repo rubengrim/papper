@@ -1,6 +1,7 @@
 #ifndef _PAPPER_CORE_H_
 #define _PAPPER_CORE_H_
 
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -13,6 +14,7 @@
 #include <vector>
 
 #include "codec.h"
+#include "level.h"
 #include "prefix.h"
 #include "queue.h"
 #include "sink.h"
@@ -141,6 +143,11 @@ class Backend
         _prefix_formatter.queue_new_formatter(formatter);
     }
 
+    void set_new_minimum_log_level(const Level new_level)
+    {
+        min_log_level.store(new_level, std::memory_order_release);
+    }
+
   private:
     // May ONLY be called by the backend thread
     void remove_and_delete_node(ThreadContextNode* node)
@@ -191,6 +198,10 @@ class Backend
         buffer = q.reserve_read(header.payload_size);
         std::string message = header.decoding_fn(header.fmt_str, buffer);
         q.commit_read();
+
+        if (header.metadata.level
+            < min_log_level.load(std::memory_order_acquire))
+            return true; // Drop the event if to low level
 
         std::string prefix = _prefix_formatter.format(header.metadata);
 
@@ -268,6 +279,7 @@ class Backend
     std::atomic<ThreadContextNode*> _head = nullptr;
     sink::SinkHandler _sink;
     prefix::PrefixFormatterHandler _prefix_formatter;
+    std::atomic<Level> min_log_level = Level::Trace;
     std::thread _backend_thread;
 };
 

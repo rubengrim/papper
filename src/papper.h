@@ -5,6 +5,7 @@
 #include <source_location>
 
 #include "core.h"
+#include "level.h"
 #include "prefix.h"
 
 namespace papper
@@ -45,12 +46,19 @@ inline void set_default_queue_size(const size_t queue_size)
     core::defaults::queue_size = queue_size;
 }
 
+// Initializes the backend and initializes and allocates memory for the calling
+// thread's queue
 inline void allocate(const size_t queue_size = core::defaults::queue_size)
 {
     core::get_or_create_thread_queue(queue_size);
 }
 
-template <typename... Args>
+inline void set_level(const Level level)
+{
+    core::Backend::get_or_create_instance().set_new_minimum_log_level(level);
+}
+
+template <Level Level, typename... Args>
 struct log
 {
     log(const char* fmt_str, Args&&... args,
@@ -58,18 +66,23 @@ struct log
     {
         core::Queue& q = core::get_or_create_thread_queue();
 
-        size_t total_args_size
-            = (core::Codec<std::remove_cvref_t<Args>>::encoded_size(args)
-               + ...);
+        size_t total_args_size = 0;
+        if constexpr (sizeof...(args) > 0)
+        {
+            total_args_size
+                = (core::Codec<std::remove_cvref_t<Args>>::encoded_size(args)
+                   + ...);
+        }
         size_t header_plus_args_size
             = total_args_size + sizeof(core::LogEventHeader);
 
-        prefix::LogEventMetadata metadata
-            = { .timestamp = std::chrono::system_clock::now(),
-                .filename = location.file_name(),
-                .functionname = location.function_name(),
-                .linenumber = location.line(),
-                .level = 0 };
+        prefix::LogEventMetadata metadata = {
+            .level = Level,
+            .timestamp = std::chrono::system_clock::now(),
+            .filename = location.file_name(),
+            .functionname = location.function_name(),
+            .linenumber = location.line(),
+        };
 
         core::LogEventHeader header;
         header.fmt_str = fmt_str;
@@ -92,7 +105,53 @@ struct log
 };
 
 template <typename... Args>
-log(const char*, Args&&...) -> log<Args...>;
+log(const char*, Args&&...) -> log<Level::Info, Args...>;
+
+// Trace
+template <Level Level, typename... Args>
+struct trace : public log<Level, Args...>
+{
+    using log<Level, Args...>::log;
+};
+template <typename... Args>
+trace(const char*, Args&&...) -> trace<Level::Trace, Args...>;
+
+// Debug
+template <Level Level, typename... Args>
+struct debug : public log<Level, Args...>
+{
+    using log<Level, Args...>::log;
+};
+template <typename... Args>
+debug(const char*, Args&&...) -> debug<Level::Debug, Args...>;
+
+// Info
+template <Level Level, typename... Args>
+struct info : public log<Level, Args...>
+{
+    using log<Level, Args...>::log;
+};
+template <typename... Args>
+info(const char*, Args&&...) -> info<Level::Info, Args...>;
+
+// Warning
+template <Level Level, typename... Args>
+struct warn : public log<Level, Args...>
+{
+    using log<Level, Args...>::log;
+};
+template <typename... Args>
+warn(const char*, Args&&...) -> warn<Level::Warn, Args...>;
+
+// Error
+template <Level Level, typename... Args>
+struct error : public log<Level, Args...>
+{
+    using log<Level, Args...>::log;
+};
+template <typename... Args>
+error(const char*, Args&&...) -> error<Level::Error, Args...>;
+
 }
 
 // clang-format off
