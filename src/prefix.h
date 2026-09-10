@@ -44,20 +44,18 @@ StaticString(const char (&)[N]) -> StaticString<N>;
 
 enum class PrefixField
 {
-    Timestamp,
-    Filename,
-    Functionname,
-    LineNumber,
+    Time,
+    File,
+    Function,
+    Line,
     Level,
 };
 
 constexpr bool name_to_field_enum(std::string_view name, PrefixField& field)
 {
     constexpr std::pair<std::string_view, PrefixField> table[] = {
-        { "timestamp", PrefixField::Timestamp },
-        { "filename", PrefixField::Filename },
-        { "functionname", PrefixField::Functionname },
-        { "linenumber", PrefixField::LineNumber },
+        { "time", PrefixField::Time },         { "file", PrefixField::File },
+        { "function", PrefixField::Function }, { "line", PrefixField::Line },
         { "level", PrefixField::Level },
     };
 
@@ -76,9 +74,10 @@ constexpr bool name_to_field_enum(std::string_view name, PrefixField& field)
 enum class PrefixFieldFormatSpec
 {
     None,
-    TimestepHMS,  // 16:08:09
-    TimestepHMSf, // 16:08:09.796341
-    TimestepHMSF, // 16:08:09.796341126
+    TimeHMS,      // 16:08:09
+    TimeHMSf,     // 16:08:09.796341
+    TimeHMSF,     // 16:08:09.796341126
+    FileNameOnly, // file.txt
 };
 
 constexpr bool name_to_format_spec_enum(std::string_view name,
@@ -86,9 +85,11 @@ constexpr bool name_to_format_spec_enum(std::string_view name,
 {
     constexpr std::pair<std::string_view, PrefixFieldFormatSpec> table[] = {
         { "", PrefixFieldFormatSpec::None },
-        { "HMS", PrefixFieldFormatSpec::TimestepHMS },
-        { "HMSf", PrefixFieldFormatSpec::TimestepHMSf },
-        { "HMSF", PrefixFieldFormatSpec::TimestepHMSF },
+        { "HMS", PrefixFieldFormatSpec::TimeHMS },
+        { "HMSf", PrefixFieldFormatSpec::TimeHMSf },
+        { "HMSF", PrefixFieldFormatSpec::TimeHMSF },
+        { "path", PrefixFieldFormatSpec::None },
+        { "nameonly", PrefixFieldFormatSpec::FileNameOnly },
     };
 
     for (const auto& e : table)
@@ -106,14 +107,18 @@ constexpr bool name_to_format_spec_enum(std::string_view name,
 consteval bool validate_field_spec_combination(PrefixField field,
                                                PrefixFieldFormatSpec spec)
 {
-    if (field == PrefixField::Timestamp)
+    if (field == PrefixField::Time)
     {
-        // Check it is any of the valid timestamp specs
-        if (spec == PrefixFieldFormatSpec::TimestepHMS)
+        if (spec == PrefixFieldFormatSpec::TimeHMS)
             return true;
-        if (spec == PrefixFieldFormatSpec::TimestepHMSf)
+        if (spec == PrefixFieldFormatSpec::TimeHMSf)
             return true;
-        if (spec == PrefixFieldFormatSpec::TimestepHMSF)
+        if (spec == PrefixFieldFormatSpec::TimeHMSF)
+            return true;
+    }
+    else if (field == PrefixField::File)
+    {
+        if (spec == PrefixFieldFormatSpec::FileNameOnly)
             return true;
     }
 
@@ -160,21 +165,24 @@ consteval void expand_spec_into_result(PrefixFieldFormatSpec spec,
                                        ParsedPatternT& result)
 {
     std::string_view expansion = "";
-    if (spec == PrefixFieldFormatSpec::None)
+
+    switch (spec)
     {
+    case (PrefixFieldFormatSpec::None):
         expansion = "{}";
-    }
-    else if (spec == PrefixFieldFormatSpec::TimestepHMS)
-    {
+        break;
+    case (PrefixFieldFormatSpec::TimeHMS):
         expansion = "{:%H:%M:%OS}";
-    }
-    else if (spec == PrefixFieldFormatSpec::TimestepHMSf)
-    {
+        break;
+    case (PrefixFieldFormatSpec::TimeHMSf):
         expansion = "{:%H:%M:%S}";
-    }
-    else if (spec == PrefixFieldFormatSpec::TimestepHMSF)
-    {
+        break;
+    case (PrefixFieldFormatSpec::TimeHMSF):
         expansion = "{:%H:%M:%S}";
+        break;
+    case (PrefixFieldFormatSpec::FileNameOnly):
+        expansion = "{}";
+        break;
     }
 
     for (auto c : expansion)
@@ -299,51 +307,61 @@ consteval auto parse_pattern()
     return result;
 }
 
-// Note to me in the future: decltype(auto) combined with return () adds a
-// reference to the returned type, so rec entries aren't actually copied
+// Note to me in the future: decltype(auto) combined with return ()
+// adds a reference to the returned type, so rec entries aren't
+// actually copied
 template <PrefixField Field>
 constexpr decltype(auto) get_field(const LogEventMetadata& rec)
 {
-    if constexpr (Field == PrefixField::Timestamp)
+    if constexpr (Field == PrefixField::Time)
         return (rec.timestamp);
-    else if constexpr (Field == PrefixField::Filename)
+    else if constexpr (Field == PrefixField::File)
         return (rec.filename);
-    else if constexpr (Field == PrefixField::Functionname)
+    else if constexpr (Field == PrefixField::Function)
         return (rec.functionname);
-    else if constexpr (Field == PrefixField::LineNumber)
+    else if constexpr (Field == PrefixField::Line)
         return (rec.linenumber);
     else if constexpr (Field == PrefixField::Level)
         return (rec.level);
     else
-        static_assert(false, "field is invalid"); // Should be unreachable
+        static_assert(false,
+                      "field is invalid"); // Should be unreachable
 }
 
-// For some specs the arg has to be expanded into multiple args or converted
-// somehow
-// Returns a tuple with the expanded args
+// For some specs the arg has to be expanded into multiple args or
+// converted somehow Returns a tuple with the expanded args
 template <PrefixFieldFormatSpec Spec, typename T>
-constexpr auto expand_format_arg(const T& arg)
+auto expand_and_process_format_arg(const T& arg)
 {
 
     if constexpr (Spec == PrefixFieldFormatSpec::None)
     {
-        // Return raw field if there is no spec
         return std::make_tuple(arg);
     }
-    else if constexpr (Spec == PrefixFieldFormatSpec::TimestepHMS)
+    else if constexpr (Spec == PrefixFieldFormatSpec::TimeHMS)
     {
-        // No expansion for HMS
-        return std::make_tuple(arg);
+        static auto tz = std::chrono::current_zone();
+        auto local_timepoint = tz->to_local(arg);
+        return std::make_tuple(local_timepoint);
     }
-    else if constexpr (Spec == PrefixFieldFormatSpec::TimestepHMSf)
+    else if constexpr (Spec == PrefixFieldFormatSpec::TimeHMSf)
     {
-        auto us = std::chrono::time_point_cast<std::chrono::microseconds>(arg);
+        static auto tz = std::chrono::current_zone();
+        auto local_timepoint = tz->to_local(arg);
+        auto us = std::chrono::time_point_cast<std::chrono::microseconds>(
+            local_timepoint);
         return std::make_tuple(us);
     }
-    else if constexpr (Spec == PrefixFieldFormatSpec::TimestepHMSF)
+    else if constexpr (Spec == PrefixFieldFormatSpec::TimeHMSF)
     {
-        // No expansion for HMSF
-        return std::make_tuple(arg);
+        static auto tz = std::chrono::current_zone();
+        auto local_timepoint = tz->to_local(arg);
+        return std::make_tuple(local_timepoint);
+    }
+    else if constexpr (Spec == PrefixFieldFormatSpec::FileNameOnly)
+    {
+        std::string_view filename = arg.substr(arg.find_last_of("/\\") + 1);
+        return std::make_tuple(filename);
     }
 }
 
@@ -356,8 +374,8 @@ class PrefixFormatterBase
 };
 
 template <StaticString Pattern, size_t MaxFields = 16,
-          size_t MaxFmtStrLen
-          = 1000> // 16 and 1000 should be enough in basically all cases
+          size_t MaxFmtStrLen = 1000> // 16 and 1000 should be enough
+                                      // in basically all cases
 class PrefixFormatter : public PrefixFormatterBase
 {
   public:
@@ -382,13 +400,13 @@ class PrefixFormatter : public PrefixFormatterBase
                   "prefix pattern contains unknown format spec");
     static_assert(parsed_pattern.error != ParsingError::InvalidSpecUsage,
                   "prefix pattern contains invalid field/spec combination");
-    static_assert(
-        parsed_pattern.error != ParsingError::TooManyFields,
-        "prefix pattern contains too many fields (increase limit "
-        "via PrefixFormatter<\"your pattern\", MaxFields=yournewlimit>)");
-    static_assert(
-        parsed_pattern.error != ParsingError::UnmatchedClosingBrace,
-        "prefix pattern contains '}' with no matching opening brace '{'");
+    static_assert(parsed_pattern.error != ParsingError::TooManyFields,
+                  "prefix pattern contains too many fields (increase limit "
+                  "via PrefixFormatter<\"your pattern\", "
+                  "MaxFields=yournewlimit>)");
+    static_assert(parsed_pattern.error != ParsingError::UnmatchedClosingBrace,
+                  "prefix pattern contains '}' with no matching "
+                  "opening brace '{'");
 
     template <std::size_t... I>
     std::string format_impl(const LogEventMetadata& rec,
@@ -396,8 +414,9 @@ class PrefixFormatter : public PrefixFormatterBase
     {
         constexpr std::string_view fmt_sv = parsed_pattern.fmt_str_to_sv();
 
-        auto args = std::tuple_cat(expand_format_arg<parsed_pattern.specs[I]>(
-            get_field<parsed_pattern.fields[I]>(rec))...);
+        auto args = std::tuple_cat(
+            expand_and_process_format_arg<parsed_pattern.specs[I]>(
+                get_field<parsed_pattern.fields[I]>(rec))...);
 
         return std::apply(
             [&fmt_sv](auto... x) {
@@ -412,7 +431,7 @@ class PrefixFormatterHandler
   public:
     PrefixFormatterHandler()
     {
-        _formatter = new PrefixFormatter<"[{functionname}] ">;
+        _formatter = new PrefixFormatter<"[{function}] ">;
     }
 
     ~PrefixFormatterHandler()
@@ -456,7 +475,6 @@ class PrefixFormatterHandler
     PrefixFormatterBase* _formatter;
     std::atomic<PrefixFormatterBase*> _pending_new_formatter = nullptr;
 };
-
 }
 
 #endif
