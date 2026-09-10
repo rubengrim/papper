@@ -64,13 +64,8 @@ struct log
         size_t header_plus_args_size
             = total_args_size + sizeof(core::LogEventHeader);
 
-        uint64_t timestamp = static_cast<uint64_t>(
-            std::chrono::duration_cast<std::chrono::nanoseconds>(
-                std::chrono::high_resolution_clock::now().time_since_epoch())
-                .count());
-
         prefix::LogEventMetadata metadata
-            = { .timestamp = timestamp,
+            = { .timestamp = std::chrono::system_clock::now(),
                 .filename = location.file_name(),
                 .functionname = location.function_name(),
                 .linenumber = location.line(),
@@ -101,12 +96,24 @@ log(const char*, Args&&...) -> log<Args...>;
 }
 
 // clang-format off
-#define PAPPER_SET_PREFIX(pattern)                                              \  
+#define PAPPER_SET_PREFIX(pattern)                                              \
 {                                                                               \
     papper::prefix::PrefixFormatterBase* fmt                                    \
         = new papper::prefix::PrefixFormatter<pattern>;                         \
     papper::core::Backend::get_or_create_instance().queue_new_prefix_formatter( \
         fmt);                                                                   \
+}
+// clang-format on
+
+// Use this if you need more fields, or if the expanded internal format
+// string length reaches its max
+// clang-format off
+#define PAPPER_SET_LONG_PREFIX(pattern, max_fields, max_expanded_fmt_str_len)   \
+{                                                                               \
+    papper::prefix::PrefixFormatterBase* fmt = new papper::prefix::             \
+        PrefixFormatter<pattern, max_fields, max_internal_fmt_str_len>;         \
+    papper::core::Backend::get_or_create_instance()                             \
+        .queue_new_prefix_formatter(fmt);                                       \
 }
 // clang-format on
 
