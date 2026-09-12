@@ -7,6 +7,7 @@
 #include "core.h"
 #include "level.h"
 #include "prefix.h"
+#include "time.h"
 
 namespace papper
 {
@@ -76,20 +77,18 @@ struct log
         size_t header_plus_args_size
             = total_args_size + sizeof(core::LogEventHeader);
 
-        prefix::LogEventMetadata metadata = {
-            .level = Level,
-            .timestamp = std::chrono::system_clock::now(),
-            .filename = location.file_name(),
-            .functionname = location.function_name(),
-            .linenumber = location.line(),
-        };
-
         core::LogEventHeader header;
         header.fmt_str = fmt_str;
         header.payload_size = total_args_size;
         header.decoding_fn
             = &core::decode_and_format<std::remove_cvref_t<Args>...>;
-        header.metadata = metadata;
+        header.level = Level;
+        // TODO: If the cpu doesn't have invariant tsc, we have to fall back to
+        // chrono, so must figure out how to handle that
+        header.timestamp = time::read_tsc();
+        header.filename = location.file_name();
+        header.functionname = location.function_name();
+        header.linenumber = location.line();
 
         std::byte* buffer = q.reserve_write(header_plus_args_size);
         if (buffer == nullptr)

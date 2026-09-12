@@ -9,6 +9,7 @@
 #include <iostream>
 #include <memory>
 
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -18,6 +19,7 @@
 #include "prefix.h"
 #include "queue.h"
 #include "sink.h"
+#include "time.h"
 
 namespace papper::core
 {
@@ -58,7 +60,12 @@ struct LogEventHeader
     const char* fmt_str = "";
     size_t payload_size;
     std::string (*decoding_fn)(const char*, const std::byte*);
-    prefix::LogEventMetadata metadata;
+    // Metadata:
+    Level level;
+    uint64_t timestamp;
+    const char* filename;
+    const char* functionname;
+    uint32_t linenumber;
 };
 
 class ThreadContext
@@ -199,11 +206,19 @@ class Backend
         std::string message = header.decoding_fn(header.fmt_str, buffer);
         q.commit_read();
 
-        if (header.metadata.level
-            < min_log_level.load(std::memory_order_acquire))
+        // TODO: Move this check to frontend?
+        if (header.level < min_log_level.load(std::memory_order_acquire))
             return true; // Drop the event if to low level
 
-        std::string prefix = _prefix_formatter.format(header.metadata);
+        prefix::LogEventMetadata metadata = {
+            .level = header.level,
+            .timestamp
+            = _timestamp_converter.timestamp_to_system_time(header.timestamp),
+            .filename = header.filename,
+            .functionname = header.functionname,
+            .linenumber = header.linenumber,
+        };
+        std::string prefix = _prefix_formatter.format(metadata);
 
         _sink.write(prefix);
         _sink.write_str_and_endl(message);
@@ -229,8 +244,11 @@ class Backend
                     remove_and_delete_node(node);
                 }
             }
+            else
+            {
+                n_events_processed += 1;
+            }
 
-            n_events_processed += 1;
             node = next;
         }
 
@@ -239,6 +257,13 @@ class Backend
 
     Backend()
     {
+        if (!_timestamp_converter.init())
+        {
+            throw std::runtime_error(
+                "CPU does not have an invariant tsc. Fallback to std::chrono "
+                "is no implemented yet.");
+        }
+
         _running.store(true, std::memory_order_relaxed);
         _backend_thread = std::thread([this]() {
             uint64_t backoff_Ms = 1;
@@ -249,6 +274,8 @@ class Backend
             {
                 _sink.poll_for_pending_sink_switch();
                 _prefix_formatter.poll_for_pending_formatter_switch();
+                _timestamp_converter
+                    .sync_to_system_clock(); // Do this less often?
 
                 if (poll_threads_once() > 0)
                 {
@@ -280,6 +307,7 @@ class Backend
     sink::SinkHandler _sink;
     prefix::PrefixFormatterHandler _prefix_formatter;
     std::atomic<Level> min_log_level = Level::Trace;
+    time::TimestampConverter _timestamp_converter;
     std::thread _backend_thread;
 };
 

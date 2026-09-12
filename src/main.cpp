@@ -1,25 +1,34 @@
 #include <chrono>
+#include <cmath>
 #include <format>
 #include <iostream>
 #include <string>
 #include <thread>
 
 #include "papper.h"
+#include "time.h"
 
 int main()
 {
-    papper::set_level(papper::Level::Error);
+    double ns_per_tick;
+    papper::time::get_tsc_ns_per_tick(ns_per_tick);
+    papper::allocate(std::pow(2, 28));
 
-    papper::trace("abcd");
-    papper::debug("abcd");
-    papper::info("abcd");
-    papper::warn("abcd");
-    papper::error("abcd");
+    for (int i = 0; i < 1000; ++i)
+    {
+        papper::info("warmup");
+    }
 
-    // std::string_view s = "/home/ruben.txt";
-    // std::string_view s2 = s.substr(s.find_last_of("/\\") + 1);
+    int trials = 1000000;
+    uint64_t start = papper::time::read_tsc();
+    for (int i = 0; i < trials; ++i)
+    {
+        papper::info("hello");
+    }
+    uint64_t end = papper::time::read_tsc();
 
-    // papper::log("{}", s2);
+    double avg = ns_per_tick * (double)(end - start) / (double)trials;
+    papper::info("average latency: {} ns", avg);
 
     return 0;
 }

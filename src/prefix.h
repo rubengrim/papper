@@ -23,8 +23,8 @@ struct LogEventMetadata
 {
     Level level;
     std::chrono::time_point<std::chrono::system_clock> timestamp;
-    std::string_view filename;
-    std::string_view functionname;
+    const char* filename;
+    const char* functionname;
     uint32_t linenumber;
 };
 
@@ -383,7 +383,9 @@ auto expand_and_process_format_arg(const T& arg)
     }
     else if constexpr (Spec == PrefixFieldFormatSpec::FileNameOnly)
     {
-        std::string_view filename = arg.substr(arg.find_last_of("/\\") + 1);
+        std::string_view path_sv = arg;
+        std::string_view filename
+            = path_sv.substr(path_sv.find_last_of("/\\") + 1);
         return std::make_tuple(filename);
     }
 }

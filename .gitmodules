@@ -1,0 +1,3 @@
+[submodule "dependencies/lomp"]
+	path = dependencies/lomp
+	url = git@github.com:parallel-runtimes/lomp.git
