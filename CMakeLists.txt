@@ -24,3 +24,8 @@ include(CTest)
 if(BUILD_TESTING)
   add_subdirectory(tests)
 endif()
+
+option(BUILD_BENCHMARK "Build benchmarks" ON)
+if(BUILD_BENCHMARK)
+  add_subdirectory(benchmark)
+endif()

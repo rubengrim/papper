@@ -13,6 +13,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -55,12 +56,15 @@ std::string decode_and_format(const char* fmt_str, const std::byte* args_data)
         args);
 }
 
-// Wrapper so that decode_and_format can be correctly specialized from a macro
+template <typename Tuple>
+struct DecodingFunction;
+
 template <typename... Args>
-consteval auto get_decoding_function(Args&&...)
+struct DecodingFunction<std::tuple<Args...>>
 {
-    return &decode_and_format<std::remove_cvref_t<Args>...>;
-}
+    static constexpr auto fn
+        = &decode_and_format<std::remove_cvref_t<Args>...>;
+};
 
 struct CallSiteStaticData
 {
@@ -420,7 +424,8 @@ void push_log_event(const CallSiteStaticData* static_data, Args&&... args)
     static constexpr papper::detail::CallSiteStaticData static_data = {     \
         level,                                                              \
         fmt_str,                                                            \
-        papper::detail::get_decoding_function(__VA_ARGS__),                 \
+        papper::detail::DecodingFunction<                                   \
+            decltype(std::forward_as_tuple(__VA_ARGS__))>::fn,              \
         std::source_location::current(),                                    \
     };                                                                      \
     papper::detail::push_log_event(&static_data __VA_OPT__(,) __VA_ARGS__); \
