@@ -38,6 +38,7 @@ StaticString(const char (&)[N]) -> StaticString<N>;
 struct PatternData
 {
     LogLevel level;
+    const char* thread_name;
     std::chrono::time_point<std::chrono::system_clock> timestamp;
     const char* filename;
     const char* functionname;
@@ -48,6 +49,7 @@ struct PatternData
 enum class PatternField
 {
     Level,
+    ThreadName,
     Time,
     File,
     Function,
@@ -64,7 +66,8 @@ constexpr bool name_to_field_enum(std::string_view name, PatternField& field)
             { "line", PatternField::Line },
             { "level", PatternField::Level },
             { "message", PatternField::Message },
-            { "m", PatternField::Message } };
+            { "m", PatternField::Message },
+            { "thread", PatternField::ThreadName } };
 
     for (const auto& e : table)
     {
@@ -351,6 +354,8 @@ constexpr decltype(auto) get_field(const PatternData& data)
         return (data.linenumber);
     else if constexpr (Field == PatternField::Message)
         return (data.message);
+    else if constexpr (Field == PatternField::ThreadName)
+        return (data.thread_name);
     else
         static_assert(false,
                       "field is invalid"); // Should be unreachable
@@ -460,8 +465,9 @@ class PatternFormatterHandler
     PatternFormatterHandler()
     {
         // Set default pattern
-        _formatter = new PatternFormatter<
-            "[{time:HMSf}] ({level}) ({file:nameonly}:{line}) {message}">;
+        _formatter
+            = new PatternFormatter<"[{time:HMSf}] ({level}) "
+                                   "({file:nameonly}:{line}) {message}">;
     }
 
     ~PatternFormatterHandler()

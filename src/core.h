@@ -15,6 +15,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "codec.h"
@@ -73,6 +74,7 @@ struct CallSiteStaticData
 struct LogEventHeader
 {
     const CallSiteStaticData* static_data;
+    const char* thread_name;
     uint64_t timestamp;
     size_t payload_size;
 };
@@ -80,14 +82,28 @@ struct LogEventHeader
 class ThreadContext
 {
   public:
-    ThreadContext(const size_t queue_size)
+    ThreadContext(std::string_view thread_name, const size_t queue_size)
         : _q{ queue_size }, _is_alive{ true }
     {
+        if (thread_name == "")
+        {
+            static std::atomic<int> unnamed_thread_counter{ 0 };
+            _name = "thread_" + std::to_string(++unnamed_thread_counter);
+        }
+        else
+        {
+            _name = thread_name;
+        }
     }
 
     queue::Queue& get_queue()
     {
         return _q;
+    }
+
+    const char* get_name()
+    {
+        return _name.c_str();
     }
 
     bool thread_is_alive()
@@ -101,6 +117,7 @@ class ThreadContext
     }
 
   private:
+    std::string _name;
     queue::Queue _q;
     std::atomic<bool> _is_alive;
 };
@@ -222,6 +239,7 @@ class Backend
 
         pattern::PatternData pattern_data = {
             .level = header.static_data->level,
+            .thread_name = header.thread_name,
             .timestamp
             = _timestamp_converter.timestamp_to_system_time(header.timestamp),
             .filename = header.static_data->location.file_name(),
@@ -325,8 +343,8 @@ class Backend
 class ThreadContextHandler
 {
   public:
-    ThreadContextHandler(const size_t queue_size)
-        : _context{ new ThreadContext{ queue_size } }
+    ThreadContextHandler(std::string_view thread_name, const size_t queue_size)
+        : _context{ new ThreadContext{ thread_name, queue_size } }
     {
         Backend::get_or_create_instance().register_thread(_context);
     }
@@ -344,21 +362,28 @@ class ThreadContextHandler
         return _context->get_queue();
     }
 
+    const char* get_name()
+    {
+        return _context->get_name();
+    }
+
   private:
     ThreadContext* _context;
 };
 
-inline queue::Queue& get_or_create_thread_queue(const size_t queue_size
-                                                = defaults::queue_size)
+inline std::pair<const char*, queue::Queue*>
+get_or_create_thread_queue(std::string_view thread_name = "",
+                           const size_t queue_size = defaults::queue_size)
 {
-    static thread_local ThreadContextHandler context_handler(queue_size);
-    return context_handler.get_queue();
+    static thread_local ThreadContextHandler context_handler{ thread_name,
+                                                              queue_size };
+    return { context_handler.get_name(), &context_handler.get_queue() };
 }
 
 template <typename... Args>
 void push_log_event(const CallSiteStaticData* static_data, Args&&... args)
 {
-    static thread_local queue::Queue* q = &get_or_create_thread_queue();
+    static thread_local auto [thread_name, q] = get_or_create_thread_queue();
 
     size_t total_args_size = 0;
     if constexpr (sizeof...(args) > 0)
@@ -371,6 +396,7 @@ void push_log_event(const CallSiteStaticData* static_data, Args&&... args)
 
     LogEventHeader header;
     header.static_data = static_data;
+    header.thread_name = thread_name;
     // TODO: If the cpu doesn't have invariant tsc, we have to fall back to
     // chrono, so must figure out how to handle that
     header.timestamp = time::read_tsc();

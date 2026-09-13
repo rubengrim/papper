@@ -44,11 +44,13 @@ inline void set_default_queue_size(const size_t queue_size)
     core::defaults::queue_size = queue_size;
 }
 
-// Initializes the backend and initializes and allocates memory for the calling
+// Initializes the backend and initializes and allocates memory for the
 // thread's queue
-inline void allocate(const size_t queue_size = core::defaults::queue_size)
+// Allows setting a thread name
+inline void init_thread(std::string_view thread_name = "",
+                        const size_t queue_size = core::defaults::queue_size)
 {
-    core::get_or_create_thread_queue(queue_size);
+    core::get_or_create_thread_queue(thread_name, queue_size);
 }
 
 inline void set_level(const LogLevel level)
