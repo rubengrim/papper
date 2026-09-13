@@ -58,17 +58,17 @@ std::string decode_and_format(const char* fmt_str, const std::byte* args_data)
         args);
 }
 
-struct CallSiteStaticMetadata
+struct CallSiteStaticData
 {
     LogLevel level;
+    const char* fmt_str = "";
+    std::string (*decoding_fn)(const char*, const std::byte*);
     std::source_location location;
 };
 
 struct LogEventHeader
 {
-    const char* fmt_str = "";
-    std::string (*decoding_fn)(const char*, const std::byte*);
-    const CallSiteStaticMetadata* static_metadata;
+    const CallSiteStaticData* static_data;
     uint64_t timestamp;
     size_t payload_size;
 };
@@ -207,22 +207,22 @@ class Backend
         Codec<LogEventHeader>::decode(buffer, header);
         q.commit_read();
 
-        buffer = q.reserve_read(header.payload_size);
-        std::string message = header.decoding_fn(header.fmt_str, buffer);
-        q.commit_read();
-
-        // TODO: Move this check to frontend?
-        if (header.static_metadata->level
+        if (header.static_data->level
             < min_log_level.load(std::memory_order_acquire))
             return true; // Drop the event if to low level
 
+        buffer = q.reserve_read(header.payload_size);
+        std::string message = header.static_data->decoding_fn(
+            header.static_data->fmt_str, buffer);
+        q.commit_read();
+
         prefix::PrefixData prefix_data = {
-            .level = header.static_metadata->level,
+            .level = header.static_data->level,
             .timestamp
             = _timestamp_converter.timestamp_to_system_time(header.timestamp),
-            .filename = header.static_metadata->location.file_name(),
-            .functionname = header.static_metadata->location.function_name(),
-            .linenumber = header.static_metadata->location.line(),
+            .filename = header.static_data->location.file_name(),
+            .functionname = header.static_data->location.function_name(),
+            .linenumber = header.static_data->location.line(),
         };
         std::string prefix = _prefix_formatter.format(prefix_data);
 
@@ -313,7 +313,7 @@ class Backend
     sink::SinkHandler _sink;
     prefix::PrefixFormatterHandler _prefix_formatter;
     std::atomic<LogLevel> min_log_level = LogLevel::Trace;
-    time::TimestampConverter _timestamp_converter;
+    time::Clock _timestamp_converter;
     std::thread _backend_thread;
 };
 

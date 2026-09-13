@@ -60,10 +60,9 @@ inline void set_level(const LogLevel level)
 }
 
 template <typename... Args>
-void log(const char* fmt_str,
-         const core::CallSiteStaticMetadata* static_metadata, Args&&... args)
+void log(const core::CallSiteStaticData* static_data, Args&&... args)
 {
-    core::Queue& q = core::get_or_create_thread_queue();
+    static thread_local core::Queue* q = &core::get_or_create_thread_queue();
 
     size_t total_args_size = 0;
     if constexpr (sizeof...(args) > 0)
@@ -76,16 +75,13 @@ void log(const char* fmt_str,
         = total_args_size + sizeof(core::LogEventHeader);
 
     core::LogEventHeader header;
-    header.fmt_str = fmt_str;
-    header.decoding_fn
-        = &core::decode_and_format<std::remove_cvref_t<Args>...>;
-    header.static_metadata = static_metadata;
+    header.static_data = static_data;
     // TODO: If the cpu doesn't have invariant tsc, we have to fall back to
     // chrono, so must figure out how to handle that
     header.timestamp = time::read_tsc();
     header.payload_size = total_args_size;
 
-    std::byte* buffer = q.reserve_write(header_plus_args_size);
+    std::byte* buffer = q->reserve_write(header_plus_args_size);
     if (buffer == nullptr)
         return; // Not enough queue space, drop the event
 
@@ -94,38 +90,50 @@ void log(const char* fmt_str,
     // Encode args
     ((core::Codec<std::remove_cvref_t<Args>>::encode(buffer, args)), ...);
 
-    q.commit_write();
+    q->commit_write();
+}
+
+template <typename... Args>
+consteval auto get_decoding_function(Args&&...)
+{
+    return &core::decode_and_format<std::remove_cvref_t<Args>...>;
 }
 
 }
 
 // clang-format off
-#define PAPPER_LOG(log_level, fmt_str, ...)                                   \
+#define PAPPER_LOG(level, fmt_str, ...)                                       \
 {                                                                             \
-    static constexpr papper::core::CallSiteStaticMetadata static_metadata = { \
-        .level = log_level,                                                   \
-        .location = std::source_location::current(),                          \
+    static constexpr papper::core::CallSiteStaticData static_data = {         \
+        level,                                                                \
+        fmt_str,                                                              \
+        papper::get_decoding_function(__VA_ARGS__),                           \
+        std::source_location::current(),                                      \
     };                                                                        \
-    papper::log(fmt_str, &static_metadata __VA_OPT__(,) __VA_ARGS__);         \
+    papper::log(&static_data __VA_OPT__(,) __VA_ARGS__);                      \
 }
 // clang-format on
 
 // clang-format off
 #define PAPPER_SET_PREFIX(pattern)                                              \
+{                                                                               \
     papper::prefix::PrefixFormatterBase* fmt                                    \
         = new papper::prefix::PrefixFormatter<pattern>;                         \
     papper::core::Backend::get_or_create_instance().queue_new_prefix_formatter( \
-        fmt);
+        fmt);                                                                   \
+}
 // clang-format on
 
 // Use this if you need more fields, or if the expanded internal format
 // string length reaches its max
 // clang-format off
 #define PAPPER_SET_LONG_PREFIX(pattern, max_fields, max_expanded_fmt_str_len)   \
+{                                                                               \
     papper::prefix::PrefixFormatterBase* fmt = new papper::prefix::             \
         PrefixFormatter<pattern, max_fields, max_internal_fmt_str_len>;         \
     papper::core::Backend::get_or_create_instance()                             \
-        .queue_new_prefix_formatter(fmt);
+        .queue_new_prefix_formatter(fmt);                                       \
+}
 // clang-format on
 
 #endif

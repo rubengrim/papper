@@ -1,9 +1,5 @@
-#ifndef _PAPPER_TIME_H
-#define _PAPPER_TIME_H
-
-// #include <stdio.h>
-// #include <string.h>
-// #include <unistd.h>
+#ifndef _PAPPER_TIME_H_
+#define _PAPPER_TIME_H_
 
 #include <chrono>
 #include <cstdint>
@@ -12,7 +8,13 @@
 #include <string>
 
 #if (defined(__x86_64__) || defined(__i386__))
+
+#if defined(_MSC_VER)
+#include <intrin.h>
+#else
 #include <x86intrin.h>
+#endif
+
 #endif
 
 namespace papper::time
@@ -33,12 +35,15 @@ inline uint64_t read_tsc()
 #endif
 }
 
+// A lot of this is taken from
+// https://cpufun.substack.com/p/fun-with-timers-and-cpuid
+
 #if (defined(__aarch64__))
 
 // On ARM you can read cntfrq_el0 to get the tick freq (guaranteed to be
 // invariant I think), and cntvct_el0 to get the tsc value
 
-static bool get_tsc_ns_per_tick(double& tick_time)
+inline bool get_tsc_ns_per_tick(double& tick_time)
 {
     uint64_t freq;
     __asm__ volatile("mrs \t%0, cntfrq_el0" : "=r"(freq));
@@ -54,7 +59,7 @@ static bool get_tsc_ns_per_tick(double& tick_time)
 
 // This is used in cases where it was not possible to extract real info about
 // tick freq, so we need to measure it
-static double measure_tsc_tick()
+inline double measure_tsc_tick()
 {
     // TODO: This should be done multiple times and averaged, while catching
     // and discarding extreme values (due to rescheduling etc)
@@ -80,7 +85,7 @@ struct cpuid_t
     uint32_t edx;
 };
 
-static inline void x86_cpuid(int leaf, int subleaf, struct cpuid_t* p)
+inline void x86_cpuid(int leaf, int subleaf, struct cpuid_t* p)
 {
     __asm__ __volatile__(
         "cpuid"
@@ -88,7 +93,7 @@ static inline void x86_cpuid(int leaf, int subleaf, struct cpuid_t* p)
         : "a"(leaf), "c"(subleaf));
 }
 
-static std::string cpu_brand_name()
+inline std::string cpu_brand_name()
 {
     cpuid_t cpuinfo;
     uint32_t int_buffer[4];
@@ -104,22 +109,22 @@ static std::string cpu_brand_name()
     return std::string(buffer);
 }
 
-static bool on_intel()
+inline bool on_intel()
 {
     // N.B. Apple Rosetta 2 also claims to be GenuineIntel...
     return cpu_brand_name() == "GenuineIntel";
 }
 
-static bool on_amd()
+inline bool on_amd()
 {
     return cpu_brand_name() == "AuthenticAMD";
 }
 
-static std::string cpu_model_name();
+inline std::string cpu_model_name();
 
 // Despite Wikipedia's assertion that this is what Rosetta returns,
 // what I see is "GenuineIntel", which seems rather dubious IMO.
-static bool on_apple_rosetta()
+inline bool on_apple_rosetta()
 {
     // This should work, whereas the straighforward brand name check below does
     // not.
@@ -130,7 +135,7 @@ static bool on_apple_rosetta()
 // This does more than we need simply to extract the invariant TSC
 // rate, but is useful anyway. We can get the TSC rate from here on Intel
 // if we can't find it anywhere else.
-static std::string cpu_model_name()
+inline std::string cpu_model_name()
 {
     cpuid_t cpuinfo;
     char brand[256];
@@ -178,7 +183,7 @@ static std::string cpu_model_name()
 
 // Try to extract tick time from cpuid information
 // This does not work on AMD!
-static bool extract_tick_time_from_leaf_15h(double* time)
+inline bool extract_tick_time_from_leaf_15h(double* time)
 {
     // From Intel PRM:
     // Intel Cpuid leaf  15H
@@ -216,7 +221,7 @@ static bool extract_tick_time_from_leaf_15h(double* time)
 
 // Try to extract tick time from the brand string
 // Only works on Intel
-static bool extract_tick_time_from_name(double* time)
+inline bool extract_tick_time_from_name(double* time)
 {
     auto brand_string = cpu_model_name();
     char const* brand = brand_string.c_str();
@@ -249,7 +254,7 @@ static bool extract_tick_time_from_name(double* time)
     return true;
 }
 
-static bool get_tsc_ns_per_tick(double& tick_time)
+inline bool get_tsc_ns_per_tick(double& tick_time)
 {
     // First check whether TSC can sanely be used at all.
     // These leaves are common to Intel and AMD.
@@ -300,10 +305,10 @@ static bool get_tsc_ns_per_tick(double& tick_time)
 #endif
 
 // This is not thread safe, is only meant to be used by backend
-class TimestampConverter
+class Clock
 {
   public:
-    TimestampConverter() {}
+    Clock() {}
 
     bool init()
     {
@@ -335,7 +340,8 @@ class TimestampConverter
     std::chrono::system_clock::time_point
     timestamp_to_system_time(const uint64_t ts)
     {
-        double ns_since_sync = _ns_per_tick * (double)((int64_t)(ts - _sync_point.ts));
+        double ns_since_sync
+            = _ns_per_tick * (double)((int64_t)(ts - _sync_point.ts));
         return std::chrono::time_point_cast<std::chrono::nanoseconds>(
                    _sync_point.system_time)
                + std::chrono::nanoseconds((int64_t)ns_since_sync);

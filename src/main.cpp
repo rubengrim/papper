@@ -1,22 +1,12 @@
-#include <chrono>
 #include <cmath>
-#include <cstring>
-#include <format>
-#include <iostream>
-#include <string>
-#include <thread>
 
-#include "core.h"
-#include "level.h"
 #include "papper.h"
-#include "queue.h"
-#include "time.h"
 
 int main()
 {
     // Make the backend evict all Trace logs (in the trial loop)
     // We only care about frontend latency
-    papper::set_level(papper::LogLevel::Info);
+    papper::set_level(papper::LogLevel::Trace);
 
     double ns_per_tick;
     papper::time::get_tsc_ns_per_tick(ns_per_tick);
