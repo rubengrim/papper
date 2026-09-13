@@ -1,9 +1,10 @@
 #ifndef _PAPPER_H_
 #define _PAPPER_H_
+// IWYU pragma: always_keep
 
 #include <source_location>
 
-#include "core.h" // IWYU pragma: export
+#include "core.h"
 
 namespace papper
 {

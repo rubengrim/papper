@@ -17,14 +17,12 @@
 #include <unordered_map>
 #include <vector>
 
-// IWYU pragma: begin_exports
 #include "codec.h"
 #include "level.h"
 #include "prefix.h"
 #include "queue.h"
 #include "sink.h"
 #include "time.h"
-// IWYU pragma: end_exports
 
 namespace papper::core
 {
