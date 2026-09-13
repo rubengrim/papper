@@ -1,8 +1,7 @@
 out/
 build/
 .DS_store/
-.log
 
-# Profiling data
-perf.data
-perf.data.old
+*.perf
+*.data
+*.log
