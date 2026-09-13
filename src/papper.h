@@ -62,41 +62,41 @@ inline void set_level(const LogLevel level)
 
 // clang-format off
 
-#define trace(fmt_str, ...)                                                     \
+#define trace(fmt_str, ...)                                                      \
     log_impl(papper::LogLevel::Trace, fmt_str __VA_OPT__(, ) __VA_ARGS__)
 
-#define info(fmt_str, ...)                                                      \
+#define info(fmt_str, ...)                                                       \
     log_impl(papper::LogLevel::Info, fmt_str __VA_OPT__(, ) __VA_ARGS__)
 
-#define debug(fmt_str, ...)                                                     \
+#define debug(fmt_str, ...)                                                      \
     log_impl(papper::LogLevel::Debug, fmt_str __VA_OPT__(, ) __VA_ARGS__)
 
-#define warn(fmt_str, ...)                                                      \
+#define warn(fmt_str, ...)                                                       \
     log_impl(papper::LogLevel::Warn, fmt_str __VA_OPT__(, ) __VA_ARGS__)
 
-#define error(fmt_str, ...)                                                     \
+#define error(fmt_str, ...)                                                      \
     log_impl(papper::LogLevel::Error, fmt_str __VA_OPT__(, ) __VA_ARGS__)
 
 // log() is alias for trace()
-#define log(fmt_str, ...)                                                       \
+#define log(fmt_str, ...)                                                        \
     trace(fmt_str __VA_OPT__(, ) __VA_ARGS__)
 
-#define papper_set_pattern(pattern)                                             \
-{                                                                               \
-    papper::prefix::PrefixFormatterBase* fmt                                    \
-        = new papper::prefix::PrefixFormatter<pattern>;                         \
-    papper::core::Backend::get_or_create_instance().queue_new_prefix_formatter( \
-        fmt);                                                                   \
+#define papper_set_pattern(pattern)                                              \
+{                                                                                \
+    papper::pattern::PatternFormatterBase* fmt                                   \
+        = new papper::pattern::PatternFormatter<pattern>;                        \
+    papper::core::Backend::get_or_create_instance().queue_new_pattern_formatter( \
+        fmt);                                                                    \
 }
 
 // Use this if you need more fields, or if the expanded internal format
 // string length reaches its max
-#define papper_set_long_pattern(pattern, max_fields, max_expanded_fmt_str_len)  \
-{                                                                               \
-    papper::prefix::PrefixFormatterBase* fmt = new papper::prefix::             \
-        PrefixFormatter<pattern, max_fields, max_internal_fmt_str_len>;         \
-    papper::core::Backend::get_or_create_instance()                             \
-        .queue_new_prefix_formatter(fmt);                                       \
+#define papper_set_long_pattern(pattern, max_fields, max_expanded_fmt_str_len)   \
+{                                                                                \
+    papper::pattern::PatternFormatterBase* fmt = new papper::pattern::           \
+        PatternFormatter<pattern, max_fields, max_internal_fmt_str_len>;         \
+    papper::core::Backend::get_or_create_instance()                              \
+        .queue_new_pattern_formatter(fmt);                                       \
 }
 
 // clang-format on
