@@ -335,9 +335,16 @@ class Clock
     {
         double ns_since_sync
             = _ns_per_tick * (double)((int64_t)(ts - _sync_point.ts));
-        return std::chrono::time_point_cast<std::chrono::nanoseconds>(
-                   _sync_point.system_time)
-               + std::chrono::nanoseconds((int64_t)ns_since_sync);
+
+        auto result_ns
+            = std::chrono::time_point_cast<std::chrono::nanoseconds>(
+                  _sync_point.system_time)
+              + std::chrono::nanoseconds((int64_t)ns_since_sync);
+
+        // On apple's libc the system clock has microsecond duration, so for
+        // portability, cast to the system's duration
+        return std::chrono::time_point_cast<
+            std::chrono::system_clock::duration>(result_ns);
     }
 
   private:
