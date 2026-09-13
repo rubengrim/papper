@@ -135,18 +135,20 @@ struct LatencyStats
         // Sort cycles for percentiles
         std::sort(raw_cycles.begin(), raw_cycles.end());
         const double ns_per_tick = TimerCalibrator::instance().ns_per_tick();
+        const double timer_overhead = TimerCalibrator::instance().timer_overhead_ns();
 
         auto get_percentile = [&](double pct) -> double {
             size_t idx = static_cast<size_t>(pct * (stats.iterations - 1));
-            return raw_cycles[idx] * ns_per_tick;
+            double ns = raw_cycles[idx] * ns_per_tick;
+            return (ns > timer_overhead) ? (ns - timer_overhead) : 0.0;
         };
 
-        stats.min_ns = raw_cycles.front() * ns_per_tick;
+        stats.min_ns = std::max(0.0, raw_cycles.front() * ns_per_tick - timer_overhead);
         stats.p50_ns = get_percentile(0.50);
         stats.p90_ns = get_percentile(0.90);
         stats.p99_ns = get_percentile(0.99);
         stats.p999_ns = get_percentile(0.999);
-        stats.max_ns = raw_cycles.back() * ns_per_tick;
+        stats.max_ns = std::max(0.0, raw_cycles.back() * ns_per_tick - timer_overhead);
 
         return stats;
     }
