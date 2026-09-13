@@ -1,5 +1,4 @@
-#ifndef _PAPPER_LEVEL_H_
-#define _PAPPER_LEVEL_H_
+#pragma once
 
 #include <cstdint>
 
@@ -16,5 +15,3 @@ enum LogLevel : uint8_t
 };
 
 }
-
-#endif

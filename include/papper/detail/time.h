@@ -1,5 +1,4 @@
-#ifndef _PAPPER_TIME_H_
-#define _PAPPER_TIME_H_
+#pragma once
 
 #include <chrono>
 #include <cstdint>
@@ -18,7 +17,7 @@
 // A lot of the code here is taken from:
 // https://cpufun.substack.com/p/fun-with-timers-and-cpuid
 
-namespace papper::time
+namespace papper::detail
 {
 
 inline uint64_t read_tsc()
@@ -356,5 +355,3 @@ class Clock
 };
 
 }
-
-#endif

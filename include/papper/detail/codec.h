@@ -1,5 +1,4 @@
-#ifndef _PAPPER_CODEC_H_
-#define _PAPPER_CODEC_H_
+#pragma once
 
 #include <cstddef>
 #include <cstring>
@@ -7,7 +6,7 @@
 #include <type_traits>
 #include <vector>
 
-namespace papper::codec
+namespace papper::detail
 {
 
 /*
@@ -19,6 +18,7 @@ struct Codec
     static size_t encoded_size(const T&)
     {
         static_assert(false, "type not supported");
+        return 0;
     }
 
     static void encode(std::byte*&, const T&)
@@ -96,5 +96,3 @@ struct Codec<std::basic_string<CharT, Traits, Alloc>>
 };
 
 }
-
-#endif

@@ -1,11 +1,10 @@
-#ifndef _PAPPER_SINK_H_
-#define _PAPPER_SINK_H_
+#pragma once
 
 #include <atomic>
 #include <cstdio>
 #include <string_view>
 
-namespace papper::sink
+namespace papper::detail
 {
 
 class SinkHandler
@@ -101,5 +100,3 @@ class SinkHandler
 };
 
 }
-
-#endif

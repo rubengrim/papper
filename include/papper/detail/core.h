@@ -1,5 +1,4 @@
-#ifndef _PAPPER_CORE_H_
-#define _PAPPER_CORE_H_
+#pragma once
 
 #include <atomic>
 #include <chrono>
@@ -25,7 +24,7 @@
 #include "sink.h"
 #include "time.h"
 
-namespace papper::core
+namespace papper::detail
 {
 
 namespace defaults
@@ -43,7 +42,7 @@ std::string decode_and_format(const char* fmt_str, const std::byte* args_data)
 
     // Decode arguments into tuple
     [&]<size_t... Is>(std::index_sequence<Is...>) {
-        (codec::Codec<std::tuple_element_t<Is, ArgsTuple>>::decode(
+        (Codec<std::tuple_element_t<Is, ArgsTuple>>::decode(
              args_data, std::get<Is>(args)),
          ...);
     }(std::index_sequence_for<Args...>{});
@@ -96,7 +95,7 @@ class ThreadContext
         }
     }
 
-    queue::Queue& get_queue()
+    Queue& get_queue()
     {
         return _q;
     }
@@ -118,7 +117,7 @@ class ThreadContext
 
   private:
     std::string _name;
-    queue::Queue _q;
+    Queue _q;
     std::atomic<bool> _is_alive;
 };
 
@@ -171,7 +170,7 @@ class Backend
         _sink.queue_new_sink(file, buffering_mode, buffer_size);
     }
 
-    void queue_new_pattern_formatter(pattern::PatternFormatterBase* formatter)
+    void queue_new_pattern_formatter(PatternFormatterBase* formatter)
     {
         _pattern_formatter.queue_new_formatter(formatter);
     }
@@ -218,14 +217,14 @@ class Backend
         delete node;
     }
 
-    bool try_process_log_event(queue::Queue& q)
+    bool try_process_log_event(Queue& q)
     {
         const std::byte* buffer = q.reserve_read(sizeof(LogEventHeader));
         if (buffer == nullptr)
             return false; // Nothing to read
 
         LogEventHeader header;
-        codec::Codec<LogEventHeader>::decode(buffer, header);
+        Codec<LogEventHeader>::decode(buffer, header);
         q.commit_read();
 
         if (header.static_data->level
@@ -237,7 +236,7 @@ class Backend
             header.static_data->fmt_str, buffer);
         q.commit_read();
 
-        pattern::PatternData pattern_data = {
+        PatternData pattern_data = {
             .level = header.static_data->level,
             .thread_name = header.thread_name,
             .timestamp
@@ -333,10 +332,10 @@ class Backend
   private:
     std::atomic<bool> _running = false;
     std::atomic<ThreadContextNode*> _head = nullptr;
-    sink::SinkHandler _sink;
-    pattern::PatternFormatterHandler _pattern_formatter;
+    SinkHandler _sink;
+    PatternFormatterHandler _pattern_formatter;
     std::atomic<LogLevel> min_log_level = LogLevel::Trace;
-    time::Clock _timestamp_converter;
+    Clock _timestamp_converter;
     std::thread _backend_thread;
 };
 
@@ -357,7 +356,7 @@ class ThreadContextHandler
         _context->kill();
     }
 
-    queue::Queue& get_queue()
+    Queue& get_queue()
     {
         return _context->get_queue();
     }
@@ -371,7 +370,7 @@ class ThreadContextHandler
     ThreadContext* _context;
 };
 
-inline std::pair<const char*, queue::Queue*>
+inline std::pair<const char*, Queue*>
 get_or_create_thread_queue(std::string_view thread_name = "",
                            const size_t queue_size = defaults::queue_size)
 {
@@ -389,8 +388,7 @@ void push_log_event(const CallSiteStaticData* static_data, Args&&... args)
     if constexpr (sizeof...(args) > 0)
     {
         total_args_size
-            = (codec::Codec<std::remove_cvref_t<Args>>::encoded_size(args)
-               + ...);
+            = (Codec<std::remove_cvref_t<Args>>::encoded_size(args) + ...);
     }
     size_t header_plus_args_size = total_args_size + sizeof(LogEventHeader);
 
@@ -399,7 +397,7 @@ void push_log_event(const CallSiteStaticData* static_data, Args&&... args)
     header.thread_name = thread_name;
     // TODO: If the cpu doesn't have invariant tsc, we have to fall back to
     // chrono, so must figure out how to handle that
-    header.timestamp = time::read_tsc();
+    header.timestamp = read_tsc();
     header.payload_size = total_args_size;
 
     std::byte* buffer = q->reserve_write(header_plus_args_size);
@@ -407,26 +405,24 @@ void push_log_event(const CallSiteStaticData* static_data, Args&&... args)
         return; // Not enough queue space, drop the event
 
     // Encode header
-    codec::Codec<core::LogEventHeader>::encode(buffer, header);
+    Codec<LogEventHeader>::encode(buffer, header);
     // Encode args
-    ((codec::Codec<std::remove_cvref_t<Args>>::encode(buffer, args)), ...);
+    ((Codec<std::remove_cvref_t<Args>>::encode(buffer, args)), ...);
 
     q->commit_write();
 }
 
-} // end namespace papper::core
+} // end namespace papper::detail
 
 // clang-format off
-#define log_impl(level, fmt_str, ...)                                           \
-{                                                                               \
-    static constexpr papper::core::CallSiteStaticData static_data = {           \
-        level,                                                                  \
-        fmt_str,                                                                \
-        papper::core::get_decoding_function(__VA_ARGS__),                       \
-        std::source_location::current(),                                        \
-    };                                                                          \
-    papper::core::push_log_event(&static_data __VA_OPT__(,) __VA_ARGS__);       \
+#define log_impl(level, fmt_str, ...)                                       \
+{                                                                           \
+    static constexpr papper::detail::CallSiteStaticData static_data = {     \
+        level,                                                              \
+        fmt_str,                                                            \
+        papper::detail::get_decoding_function(__VA_ARGS__),                 \
+        std::source_location::current(),                                    \
+    };                                                                      \
+    papper::detail::push_log_event(&static_data __VA_OPT__(,) __VA_ARGS__); \
 }
 // clang-format on
-
-#endif

@@ -1,21 +1,26 @@
 cmake_minimum_required(VERSION 3.22)
 
-set(CMAKE_C_COMPILER clang)
-set(CMAKE_CXX_COMPILER clang++)
+project(papper LANGUAGES CXX)
 
-project(papper)
+find_package(Threads REQUIRED)
 
-add_executable(${PROJECT_NAME})
-target_sources(${PROJECT_NAME}
-  PRIVATE
-    src/main.cpp
+add_library(papper INTERFACE)
+add_library(papper::papper ALIAS papper)
+
+target_compile_features(papper INTERFACE cxx_std_20)
+
+target_include_directories(papper
+  INTERFACE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
 )
 
-target_compile_options(${PROJECT_NAME}
-  PRIVATE
-    -Wall -Wextra -pedantic -std=c++20 -O3 -g -fno-omit-frame-pointer
+target_link_libraries(papper
+  INTERFACE
+    Threads::Threads
 )
-target_link_options(${PROJECT_NAME}
-  PRIVATE
-    # -fsanitize=address
-)
+
+include(CTest)
+if(BUILD_TESTING)
+  add_subdirectory(tests)
+endif()

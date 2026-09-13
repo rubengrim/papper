@@ -1,5 +1,4 @@
-#ifndef _PAPPER_PATTERN_H
-#define _PAPPER_PATTERN_H
+#pragma once
 
 #include <algorithm>
 #include <array>
@@ -16,7 +15,7 @@
 
 #include "level.h"
 
-namespace papper::pattern
+namespace papper::detail
 {
 
 // https://blog.ganets.ky/StaticString/
@@ -26,14 +25,14 @@ struct StaticString
     static constexpr size_t size = N;
     std::array<char, N> data;
 
-    constexpr StaticString(const char (&input)[N])
+    constexpr StaticString(const char (&input)[N + 1])
     {
         std::copy_n(input, N, data.begin());
     }
 };
 
 template <std::size_t N>
-StaticString(const char (&)[N]) -> StaticString<N>;
+StaticString(const char (&)[N]) -> StaticString<N - 1>;
 
 struct PatternData
 {
@@ -334,6 +333,7 @@ constexpr std::string_view level_to_name(LogLevel level)
     case LogLevel::Error:
         return "ERROR";
     }
+    return "UNKNOWN";
 }
 
 // Note to me in the future: decltype(auto) combined with return ()
@@ -512,5 +512,3 @@ class PatternFormatterHandler
     std::atomic<PatternFormatterBase*> _pending_new_formatter = nullptr;
 };
 }
-
-#endif

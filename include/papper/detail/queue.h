@@ -1,5 +1,4 @@
-#ifndef _PAPPER_QUEUE_H_
-#define _PAPPER_QUEUE_H_
+#pragma once
 
 #include <atomic>
 #include <bit>
@@ -11,7 +10,7 @@
 #include <stdexcept>
 #include <utility>
 
-namespace papper::queue
+namespace papper::detail
 {
 
 class Queue
@@ -168,5 +167,3 @@ class Queue
 };
 
 }
-
-#endif
