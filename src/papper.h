@@ -1,13 +1,9 @@
 #ifndef _PAPPER_H_
 #define _PAPPER_H_
 
-#include <chrono>
 #include <source_location>
 
-#include "core.h"
-#include "level.h"
-#include "prefix.h"
-#include "time.h"
+#include "core.h" // IWYU pragma: export
 
 namespace papper
 {
@@ -59,81 +55,47 @@ inline void set_level(const LogLevel level)
     core::Backend::get_or_create_instance().set_new_minimum_log_level(level);
 }
 
-template <typename... Args>
-void log(const core::CallSiteStaticData* static_data, Args&&... args)
-{
-    static thread_local core::Queue* q = &core::get_or_create_thread_queue();
-
-    size_t total_args_size = 0;
-    if constexpr (sizeof...(args) > 0)
-    {
-        total_args_size
-            = (core::Codec<std::remove_cvref_t<Args>>::encoded_size(args)
-               + ...);
-    }
-    size_t header_plus_args_size
-        = total_args_size + sizeof(core::LogEventHeader);
-
-    core::LogEventHeader header;
-    header.static_data = static_data;
-    // TODO: If the cpu doesn't have invariant tsc, we have to fall back to
-    // chrono, so must figure out how to handle that
-    header.timestamp = time::read_tsc();
-    header.payload_size = total_args_size;
-
-    std::byte* buffer = q->reserve_write(header_plus_args_size);
-    if (buffer == nullptr)
-        return; // Not enough queue space, drop the event
-
-    // Encode header
-    core::Codec<core::LogEventHeader>::encode(buffer, header);
-    // Encode args
-    ((core::Codec<std::remove_cvref_t<Args>>::encode(buffer, args)), ...);
-
-    q->commit_write();
-}
-
-template <typename... Args>
-consteval auto get_decoding_function(Args&&...)
-{
-    return &core::decode_and_format<std::remove_cvref_t<Args>...>;
-}
-
-}
+} // end namespace papper
 
 // clang-format off
-#define PAPPER_LOG(level, fmt_str, ...)                                       \
-{                                                                             \
-    static constexpr papper::core::CallSiteStaticData static_data = {         \
-        level,                                                                \
-        fmt_str,                                                              \
-        papper::get_decoding_function(__VA_ARGS__),                           \
-        std::source_location::current(),                                      \
-    };                                                                        \
-    papper::log(&static_data __VA_OPT__(,) __VA_ARGS__);                      \
-}
-// clang-format on
 
-// clang-format off
-#define PAPPER_SET_PREFIX(pattern)                                              \
+#define trace(fmt_str, ...)                                                     \
+    log_impl(papper::LogLevel::Trace, fmt_str __VA_OPT__(, ) __VA_ARGS__)
+
+#define info(fmt_str, ...)                                                      \
+    log_impl(papper::LogLevel::Info, fmt_str __VA_OPT__(, ) __VA_ARGS__)
+
+#define debug(fmt_str, ...)                                                     \
+    log_impl(papper::LogLevel::Debug, fmt_str __VA_OPT__(, ) __VA_ARGS__)
+
+#define warn(fmt_str, ...)                                                      \
+    log_impl(papper::LogLevel::Warn, fmt_str __VA_OPT__(, ) __VA_ARGS__)
+
+#define error(fmt_str, ...)                                                     \
+    log_impl(papper::LogLevel::Error, fmt_str __VA_OPT__(, ) __VA_ARGS__)
+
+// log() is alias for trace()
+#define log(fmt_str, ...)                                                       \
+    trace(fmt_str __VA_OPT__(, ) __VA_ARGS__)
+
+#define papper_set_prefix(pattern)                                              \
 {                                                                               \
     papper::prefix::PrefixFormatterBase* fmt                                    \
         = new papper::prefix::PrefixFormatter<pattern>;                         \
     papper::core::Backend::get_or_create_instance().queue_new_prefix_formatter( \
         fmt);                                                                   \
 }
-// clang-format on
 
 // Use this if you need more fields, or if the expanded internal format
 // string length reaches its max
-// clang-format off
-#define PAPPER_SET_LONG_PREFIX(pattern, max_fields, max_expanded_fmt_str_len)   \
+#define papper_set_long_prefix(pattern, max_fields, max_expanded_fmt_str_len)   \
 {                                                                               \
     papper::prefix::PrefixFormatterBase* fmt = new papper::prefix::             \
         PrefixFormatter<pattern, max_fields, max_internal_fmt_str_len>;         \
     papper::core::Backend::get_or_create_instance()                             \
         .queue_new_prefix_formatter(fmt);                                       \
 }
+
 // clang-format on
 
 #endif

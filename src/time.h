@@ -8,14 +8,15 @@
 #include <string>
 
 #if (defined(__x86_64__) || defined(__i386__))
-
 #if defined(_MSC_VER)
 #include <intrin.h>
 #else
 #include <x86intrin.h>
 #endif
-
 #endif
+
+// A lot of the code here is taken from:
+// https://cpufun.substack.com/p/fun-with-timers-and-cpuid
 
 namespace papper::time
 {
@@ -23,20 +24,13 @@ namespace papper::time
 inline uint64_t read_tsc()
 {
 #if (defined(__aarch64__))
-
     uint64_t count;
     __asm__ volatile("mrs \t%0, cntvct_el0" : "=r"(count));
     return count;
-
 #elif (defined(__x86_64__) || defined(__i386__))
-
     return __rdtsc();
-
 #endif
 }
-
-// A lot of this is taken from
-// https://cpufun.substack.com/p/fun-with-timers-and-cpuid
 
 #if (defined(__aarch64__))
 

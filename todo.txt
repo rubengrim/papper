@@ -1,0 +1,3 @@
+- Add a message field to prefix to allow user to specify where message is
+- Colors
+- Thread names

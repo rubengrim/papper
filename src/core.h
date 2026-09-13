@@ -17,18 +17,17 @@
 #include <unordered_map>
 #include <vector>
 
+// IWYU pragma: begin_exports
 #include "codec.h"
 #include "level.h"
 #include "prefix.h"
 #include "queue.h"
 #include "sink.h"
 #include "time.h"
+// IWYU pragma: end_exports
 
 namespace papper::core
 {
-
-using namespace codec;
-using namespace queue;
 
 namespace defaults
 {
@@ -45,7 +44,7 @@ std::string decode_and_format(const char* fmt_str, const std::byte* args_data)
 
     // Decode arguments into tuple
     [&]<size_t... Is>(std::index_sequence<Is...>) {
-        (Codec<std::tuple_element_t<Is, ArgsTuple>>::decode(
+        (codec::Codec<std::tuple_element_t<Is, ArgsTuple>>::decode(
              args_data, std::get<Is>(args)),
          ...);
     }(std::index_sequence_for<Args...>{});
@@ -56,6 +55,13 @@ std::string decode_and_format(const char* fmt_str, const std::byte* args_data)
             return std::vformat(fmt_str, std::make_format_args(v...));
         },
         args);
+}
+
+// Wrapper so that decode_and_format can be correctly specialized from a macro
+template <typename... Args>
+consteval auto get_decoding_function(Args&&...)
+{
+    return &decode_and_format<std::remove_cvref_t<Args>...>;
 }
 
 struct CallSiteStaticData
@@ -81,7 +87,7 @@ class ThreadContext
     {
     }
 
-    Queue& get_queue()
+    queue::Queue& get_queue()
     {
         return _q;
     }
@@ -97,7 +103,7 @@ class ThreadContext
     }
 
   private:
-    Queue _q;
+    queue::Queue _q;
     std::atomic<bool> _is_alive;
 };
 
@@ -197,14 +203,14 @@ class Backend
         delete node;
     }
 
-    bool try_process_log_event(Queue& q)
+    bool try_process_log_event(queue::Queue& q)
     {
         const std::byte* buffer = q.reserve_read(sizeof(LogEventHeader));
         if (buffer == nullptr)
             return false; // Nothing to read
 
         LogEventHeader header;
-        Codec<LogEventHeader>::decode(buffer, header);
+        codec::Codec<LogEventHeader>::decode(buffer, header);
         q.commit_read();
 
         if (header.static_data->level
@@ -266,8 +272,9 @@ class Backend
         if (!_timestamp_converter.init())
         {
             throw std::runtime_error(
-                "CPU does not have an invariant tsc. Fallback to std::chrono "
-                "is no implemented yet.");
+                "CPU does not have an invariant TSC. "
+                "Fallback to std::chrono::steady_clock "
+                "is no implemented yet, so papper can't run on this machine.");
         }
 
         _running.store(true, std::memory_order_relaxed);
@@ -334,7 +341,7 @@ class ThreadContextHandler
         _context->kill();
     }
 
-    Queue& get_queue()
+    queue::Queue& get_queue()
     {
         return _context->get_queue();
     }
@@ -343,12 +350,59 @@ class ThreadContextHandler
     ThreadContext* _context;
 };
 
-inline Queue& get_or_create_thread_queue(const size_t queue_size
-                                         = defaults::queue_size)
+inline queue::Queue& get_or_create_thread_queue(const size_t queue_size
+                                                = defaults::queue_size)
 {
     static thread_local ThreadContextHandler context_handler(queue_size);
     return context_handler.get_queue();
 }
+
+template <typename... Args>
+void push_log_event(const CallSiteStaticData* static_data, Args&&... args)
+{
+    static thread_local queue::Queue* q = &get_or_create_thread_queue();
+
+    size_t total_args_size = 0;
+    if constexpr (sizeof...(args) > 0)
+    {
+        total_args_size
+            = (codec::Codec<std::remove_cvref_t<Args>>::encoded_size(args)
+               + ...);
+    }
+    size_t header_plus_args_size = total_args_size + sizeof(LogEventHeader);
+
+    LogEventHeader header;
+    header.static_data = static_data;
+    // TODO: If the cpu doesn't have invariant tsc, we have to fall back to
+    // chrono, so must figure out how to handle that
+    header.timestamp = time::read_tsc();
+    header.payload_size = total_args_size;
+
+    std::byte* buffer = q->reserve_write(header_plus_args_size);
+    if (buffer == nullptr)
+        return; // Not enough queue space, drop the event
+
+    // Encode header
+    codec::Codec<core::LogEventHeader>::encode(buffer, header);
+    // Encode args
+    ((codec::Codec<std::remove_cvref_t<Args>>::encode(buffer, args)), ...);
+
+    q->commit_write();
 }
+
+} // end namespace papper::core
+
+// clang-format off
+#define log_impl(level, fmt_str, ...)                                           \
+{                                                                               \
+    static constexpr papper::core::CallSiteStaticData static_data = {           \
+        level,                                                                  \
+        fmt_str,                                                                \
+        papper::core::get_decoding_function(__VA_ARGS__),                       \
+        std::source_location::current(),                                        \
+    };                                                                          \
+    papper::core::push_log_event(&static_data __VA_OPT__(,) __VA_ARGS__);       \
+}
+// clang-format on
 
 #endif
