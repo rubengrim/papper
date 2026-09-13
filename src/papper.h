@@ -79,7 +79,7 @@ inline void set_level(const LogLevel level)
 #define log(fmt_str, ...)                                                       \
     trace(fmt_str __VA_OPT__(, ) __VA_ARGS__)
 
-#define papper_set_prefix(pattern)                                              \
+#define papper_set_pattern(pattern)                                             \
 {                                                                               \
     papper::prefix::PrefixFormatterBase* fmt                                    \
         = new papper::prefix::PrefixFormatter<pattern>;                         \
@@ -89,7 +89,7 @@ inline void set_level(const LogLevel level)
 
 // Use this if you need more fields, or if the expanded internal format
 // string length reaches its max
-#define papper_set_long_prefix(pattern, max_fields, max_expanded_fmt_str_len)   \
+#define papper_set_long_pattern(pattern, max_fields, max_expanded_fmt_str_len)  \
 {                                                                               \
     papper::prefix::PrefixFormatterBase* fmt = new papper::prefix::             \
         PrefixFormatter<pattern, max_fields, max_internal_fmt_str_len>;         \

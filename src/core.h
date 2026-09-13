@@ -19,7 +19,7 @@
 
 #include "codec.h"
 #include "level.h"
-#include "prefix.h"
+#include "pattern.h"
 #include "queue.h"
 #include "sink.h"
 #include "time.h"
@@ -154,9 +154,9 @@ class Backend
         _sink.queue_new_sink(file, buffering_mode, buffer_size);
     }
 
-    void queue_new_prefix_formatter(prefix::PrefixFormatterBase* formatter)
+    void queue_new_pattern_formatter(pattern::PatternFormatterBase* formatter)
     {
-        _prefix_formatter.queue_new_formatter(formatter);
+        _pattern_formatter.queue_new_formatter(formatter);
     }
 
     void set_new_minimum_log_level(const LogLevel new_level)
@@ -220,18 +220,18 @@ class Backend
             header.static_data->fmt_str, buffer);
         q.commit_read();
 
-        prefix::PrefixData prefix_data = {
+        pattern::PatternData pattern_data = {
             .level = header.static_data->level,
             .timestamp
             = _timestamp_converter.timestamp_to_system_time(header.timestamp),
             .filename = header.static_data->location.file_name(),
             .functionname = header.static_data->location.function_name(),
             .linenumber = header.static_data->location.line(),
+            .message = message,
         };
-        std::string prefix = _prefix_formatter.format(prefix_data);
+        std::string prefix = _pattern_formatter.format(pattern_data);
 
-        _sink.write(prefix);
-        _sink.write_str_and_endl(message);
+        _sink.write_str_and_endl(prefix);
 
         return true;
     }
@@ -284,7 +284,7 @@ class Backend
             while (_running.load(std::memory_order_acquire))
             {
                 _sink.poll_for_pending_sink_switch();
-                _prefix_formatter.poll_for_pending_formatter_switch();
+                _pattern_formatter.poll_for_pending_formatter_switch();
                 _timestamp_converter
                     .sync_to_system_clock(); // Do this less often?
 
@@ -316,7 +316,7 @@ class Backend
     std::atomic<bool> _running = false;
     std::atomic<ThreadContextNode*> _head = nullptr;
     sink::SinkHandler _sink;
-    prefix::PrefixFormatterHandler _prefix_formatter;
+    pattern::PatternFormatterHandler _pattern_formatter;
     std::atomic<LogLevel> min_log_level = LogLevel::Trace;
     time::Clock _timestamp_converter;
     std::thread _backend_thread;

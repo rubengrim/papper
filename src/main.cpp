@@ -5,7 +5,7 @@
 
 int main()
 {
-    log("hej {}", std::string("hopp"));
+    log("{}", std::string("this is an example of a trace message in papper"));
 
     return 0;
 }
