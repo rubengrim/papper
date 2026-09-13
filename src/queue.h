@@ -54,7 +54,6 @@ class Queue
                 }
                 else
                 {
-                    throw std::runtime_error("No room!");
                     return nullptr;
                 }
             }
@@ -67,7 +66,6 @@ class Queue
                 }
                 else
                 {
-                    throw std::runtime_error("No room!");
                     return nullptr;
                 }
             }
@@ -81,45 +79,6 @@ class Queue
         _cached_r = _r.load(std::memory_order_acquire);
         return try_reserve(_cached_r);
     }
-
-    // std::byte* reserve_write(const size_t size)
-    // {
-    //     const size_t read = _r.load(std::memory_order_acquire);
-    //     const size_t write = _w.load(std::memory_order_relaxed);
-
-    //     if (write >= read)
-    //     {
-    //         if (write + size <= _capacity)
-    //         {
-    //             _future_write_pos = write + size;
-    //             return &_buffer[write];
-    //         }
-    //         else if (size < read)
-    //         {
-    //             _end.store(write, std::memory_order_relaxed);
-    //             _future_write_pos = size;
-    //             return _buffer;
-    //         }
-    //         else
-    //         {
-    //             throw std::runtime_error("no room!");
-    //             return nullptr;
-    //         }
-    //     }
-    //     else // read > write
-    //     {
-    //         if (write + size <= read - 1)
-    //         {
-    //             _future_write_pos = write + size;
-    //             return _buffer + write;
-    //         }
-    //         else
-    //         {
-    //             throw std::runtime_error("no room!");
-    //             return nullptr;
-    //         }
-    //     }
-    // }
 
     void commit_write()
     {
@@ -177,48 +136,6 @@ class Queue
         return try_reserve(_cached_w);
     }
 
-    // const std::byte* reserve_read(const size_t size)
-    // {
-    //     const size_t read = _r.load(std::memory_order_relaxed);
-    //     const size_t write = _w.load(std::memory_order_acquire);
-
-    //     if (write > read)
-    //     {
-    //         if (read + size <= write)
-    //         {
-    //             _future_read_pos = read + size;
-    //             return &_buffer[read];
-    //         }
-    //         else
-    //         {
-    //             return nullptr;
-    //         }
-    //     }
-    //     else if (read == write)
-    //     {
-    //         return nullptr;
-    //     }
-    //     else // read > write
-    //     {
-    //         const size_t end = _end.load(std::memory_order_relaxed);
-    //         if (read + size <= end)
-    //         {
-    //             _future_read_pos = (read + size) & _wrap_mask;
-    //             return &_buffer[read];
-    //         }
-    //         else if (size <= write)
-    //         {
-    //             _end.store(_capacity, std::memory_order_relaxed);
-    //             _future_read_pos = size;
-    //             return &_buffer[0];
-    //         }
-    //         else
-    //         {
-    //             return nullptr;
-    //         }
-    //     }
-    // }
-
     void commit_read()
     {
         _r.store(_future_read_pos, std::memory_order_release);
@@ -246,8 +163,8 @@ class Queue
     // set to after the write/read is commited
     // TODO: Put this logic in some RAII wrapper for safer and easier queue
     // access
-    size_t _future_write_pos = 0;
-    size_t _future_read_pos = 0;
+    alignas(_cache_line_len) size_t _future_write_pos = 0;
+    alignas(_cache_line_len) size_t _future_read_pos = 0;
 };
 
 }
