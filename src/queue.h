@@ -34,190 +34,190 @@ class Queue
         delete[] _buffer;
     }
 
-    // std::byte* reserve_write(const size_t size)
-    // {
-    //     const size_t write = _w.load(std::memory_order_relaxed);
-
-    //     auto try_reserve = [&](const size_t read) -> std::byte* {
-    //         if (write >= read)
-    //         {
-    //             if (write + size <= _capacity)
-    //             {
-    //                 _future_write_pos = write + size;
-    //                 return &_buffer[write];
-    //             }
-    //             else if (size < read)
-    //             {
-    //                 _end.store(write, std::memory_order_relaxed);
-    //                 _future_write_pos = size;
-    //                 return _buffer;
-    //             }
-    //             else
-    //             {
-    //                 throw std::runtime_error("No room!");
-    //                 return nullptr;
-    //             }
-    //         }
-    //         else // read > write
-    //         {
-    //             if (write + size <= read - 1)
-    //             {
-    //                 _future_write_pos = write + size;
-    //                 return _buffer + write;
-    //             }
-    //             else
-    //             {
-    //                 throw std::runtime_error("No room!");
-    //                 return nullptr;
-    //             }
-    //         }
-    //     };
-
-    //     std::byte* buffer = try_reserve(_cached_r);
-    //     if (buffer != nullptr)
-    //         return buffer;
-
-    //     // Reload _r and try again
-    //     _cached_r = _r.load(std::memory_order_acquire);
-    //     return try_reserve(_cached_r);
-    // }
-
     std::byte* reserve_write(const size_t size)
     {
-        const size_t read = _r.load(std::memory_order_acquire);
         const size_t write = _w.load(std::memory_order_relaxed);
 
-        if (write >= read)
-        {
-            if (write + size <= _capacity)
+        auto try_reserve = [&](const size_t read) -> std::byte* {
+            if (write >= read)
             {
-                _future_write_pos = write + size;
-                return &_buffer[write];
+                if (write + size <= _capacity)
+                {
+                    _future_write_pos = write + size;
+                    return &_buffer[write];
+                }
+                else if (size < read)
+                {
+                    _end.store(write, std::memory_order_relaxed);
+                    _future_write_pos = size;
+                    return _buffer;
+                }
+                else
+                {
+                    throw std::runtime_error("No room!");
+                    return nullptr;
+                }
             }
-            else if (size < read)
+            else // read > write
             {
-                _end.store(write, std::memory_order_relaxed);
-                _future_write_pos = size;
-                return _buffer;
+                if (write + size <= read - 1)
+                {
+                    _future_write_pos = write + size;
+                    return _buffer + write;
+                }
+                else
+                {
+                    throw std::runtime_error("No room!");
+                    return nullptr;
+                }
             }
-            else
-            {
-                throw std::runtime_error("No room!");
-                return nullptr;
-            }
-        }
-        else // read > write
-        {
-            if (write + size <= read - 1)
-            {
-                _future_write_pos = write + size;
-                return _buffer + write;
-            }
-            else
-            {
-                throw std::runtime_error("No room!");
-                return nullptr;
-            }
-        }
+        };
+
+        std::byte* buffer = try_reserve(_cached_r);
+        if (buffer != nullptr)
+            return buffer;
+
+        // Reload _r and try again
+        _cached_r = _r.load(std::memory_order_acquire);
+        return try_reserve(_cached_r);
     }
+
+    // std::byte* reserve_write(const size_t size)
+    // {
+    //     const size_t read = _r.load(std::memory_order_acquire);
+    //     const size_t write = _w.load(std::memory_order_relaxed);
+
+    //     if (write >= read)
+    //     {
+    //         if (write + size <= _capacity)
+    //         {
+    //             _future_write_pos = write + size;
+    //             return &_buffer[write];
+    //         }
+    //         else if (size < read)
+    //         {
+    //             _end.store(write, std::memory_order_relaxed);
+    //             _future_write_pos = size;
+    //             return _buffer;
+    //         }
+    //         else
+    //         {
+    //             throw std::runtime_error("no room!");
+    //             return nullptr;
+    //         }
+    //     }
+    //     else // read > write
+    //     {
+    //         if (write + size <= read - 1)
+    //         {
+    //             _future_write_pos = write + size;
+    //             return _buffer + write;
+    //         }
+    //         else
+    //         {
+    //             throw std::runtime_error("no room!");
+    //             return nullptr;
+    //         }
+    //     }
+    // }
 
     void commit_write()
     {
         _w.store(_future_write_pos, std::memory_order_release);
     }
 
-    // const std::byte* reserve_read(const size_t size)
-    // {
-    //     const size_t read = _r.load(std::memory_order_relaxed);
-
-    //     auto try_reserve = [&](const size_t write) -> const std::byte* {
-    //         if (write > read)
-    //         {
-    //             if (read + size <= write)
-    //             {
-    //                 _future_read_pos = read + size;
-    //                 return &_buffer[read];
-    //             }
-    //             else
-    //             {
-    //                 return nullptr;
-    //             }
-    //         }
-    //         else if (read == write)
-    //         {
-    //             return nullptr;
-    //         }
-    //         else // read > write
-    //         {
-    //             const size_t end = _end.load(std::memory_order_relaxed);
-    //             if (read + size <= end)
-    //             {
-    //                 _future_read_pos = (read + size) & _wrap_mask;
-    //                 return &_buffer[read];
-    //             }
-    //             else if (size <= write)
-    //             {
-    //                 _end.store(_capacity, std::memory_order_relaxed);
-    //                 _future_read_pos = size;
-    //                 return &_buffer[0];
-    //             }
-    //             else
-    //             {
-    //                 return nullptr;
-    //             }
-    //         }
-    //     };
-
-    //     const std::byte* buffer = try_reserve(_cached_w);
-    //     if (buffer != nullptr)
-    //         return buffer;
-
-    //     // Reload _w and try again
-    //     _cached_w = _w.load(std::memory_order_acquire);
-    //     return try_reserve(_cached_w);
-    // }
-
     const std::byte* reserve_read(const size_t size)
     {
         const size_t read = _r.load(std::memory_order_relaxed);
-        const size_t write = _w.load(std::memory_order_acquire);
 
-        if (write > read)
-        {
-            if (read + size <= write)
+        auto try_reserve = [&](const size_t write) -> const std::byte* {
+            if (write > read)
             {
-                _future_read_pos = read + size;
-                return &_buffer[read];
+                if (read + size <= write)
+                {
+                    _future_read_pos = read + size;
+                    return &_buffer[read];
+                }
+                else
+                {
+                    return nullptr;
+                }
             }
-            else
-            {
-                return nullptr;
-            }
-        }
-        else if (read == write)
-        {
-            return nullptr;
-        }
-        else // read > write
-        {
-            const size_t end = _end.load(std::memory_order_relaxed);
-            if (read + size <= end)
-            {
-                _future_read_pos = (read + size) & _wrap_mask;
-                return &_buffer[read];
-            }
-            else if (size <= write)
-            {
-                _end.store(_capacity, std::memory_order_relaxed);
-                _future_read_pos = size;
-                return &_buffer[0];
-            }
-            else
+            else if (read == write)
             {
                 return nullptr;
             }
-        }
+            else // read > write
+            {
+                const size_t end = _end.load(std::memory_order_relaxed);
+                if (read + size <= end)
+                {
+                    _future_read_pos = (read + size) & _wrap_mask;
+                    return &_buffer[read];
+                }
+                else if (size <= write)
+                {
+                    _end.store(_capacity, std::memory_order_relaxed);
+                    _future_read_pos = size;
+                    return &_buffer[0];
+                }
+                else
+                {
+                    return nullptr;
+                }
+            }
+        };
+
+        const std::byte* buffer = try_reserve(_cached_w);
+        if (buffer != nullptr)
+            return buffer;
+
+        // Reload _w and try again
+        _cached_w = _w.load(std::memory_order_acquire);
+        return try_reserve(_cached_w);
     }
+
+    // const std::byte* reserve_read(const size_t size)
+    // {
+    //     const size_t read = _r.load(std::memory_order_relaxed);
+    //     const size_t write = _w.load(std::memory_order_acquire);
+
+    //     if (write > read)
+    //     {
+    //         if (read + size <= write)
+    //         {
+    //             _future_read_pos = read + size;
+    //             return &_buffer[read];
+    //         }
+    //         else
+    //         {
+    //             return nullptr;
+    //         }
+    //     }
+    //     else if (read == write)
+    //     {
+    //         return nullptr;
+    //     }
+    //     else // read > write
+    //     {
+    //         const size_t end = _end.load(std::memory_order_relaxed);
+    //         if (read + size <= end)
+    //         {
+    //             _future_read_pos = (read + size) & _wrap_mask;
+    //             return &_buffer[read];
+    //         }
+    //         else if (size <= write)
+    //         {
+    //             _end.store(_capacity, std::memory_order_relaxed);
+    //             _future_read_pos = size;
+    //             return &_buffer[0];
+    //         }
+    //         else
+    //         {
+    //             return nullptr;
+    //         }
+    //     }
+    // }
 
     void commit_read()
     {

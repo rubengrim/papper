@@ -9,9 +9,12 @@
 #include <iostream>
 #include <memory>
 
+#include <mutex>
+#include <source_location>
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include "codec.h"
@@ -55,17 +58,19 @@ std::string decode_and_format(const char* fmt_str, const std::byte* args_data)
         args);
 }
 
+struct CallSiteStaticMetadata
+{
+    LogLevel level;
+    std::source_location location;
+};
+
 struct LogEventHeader
 {
     const char* fmt_str = "";
-    size_t payload_size;
     std::string (*decoding_fn)(const char*, const std::byte*);
-    // Metadata:
-    Level level;
+    const CallSiteStaticMetadata* static_metadata;
     uint64_t timestamp;
-    const char* filename;
-    const char* functionname;
-    uint32_t linenumber;
+    size_t payload_size;
 };
 
 class ThreadContext
@@ -150,7 +155,7 @@ class Backend
         _prefix_formatter.queue_new_formatter(formatter);
     }
 
-    void set_new_minimum_log_level(const Level new_level)
+    void set_new_minimum_log_level(const LogLevel new_level)
     {
         min_log_level.store(new_level, std::memory_order_release);
     }
@@ -207,18 +212,19 @@ class Backend
         q.commit_read();
 
         // TODO: Move this check to frontend?
-        if (header.level < min_log_level.load(std::memory_order_acquire))
+        if (header.static_metadata->level
+            < min_log_level.load(std::memory_order_acquire))
             return true; // Drop the event if to low level
 
-        prefix::LogEventMetadata metadata = {
-            .level = header.level,
+        prefix::PrefixData prefix_data = {
+            .level = header.static_metadata->level,
             .timestamp
             = _timestamp_converter.timestamp_to_system_time(header.timestamp),
-            .filename = header.filename,
-            .functionname = header.functionname,
-            .linenumber = header.linenumber,
+            .filename = header.static_metadata->location.file_name(),
+            .functionname = header.static_metadata->location.function_name(),
+            .linenumber = header.static_metadata->location.line(),
         };
-        std::string prefix = _prefix_formatter.format(metadata);
+        std::string prefix = _prefix_formatter.format(prefix_data);
 
         _sink.write(prefix);
         _sink.write_str_and_endl(message);
@@ -306,7 +312,7 @@ class Backend
     std::atomic<ThreadContextNode*> _head = nullptr;
     sink::SinkHandler _sink;
     prefix::PrefixFormatterHandler _prefix_formatter;
-    std::atomic<Level> min_log_level = Level::Trace;
+    std::atomic<LogLevel> min_log_level = LogLevel::Trace;
     time::TimestampConverter _timestamp_converter;
     std::thread _backend_thread;
 };
@@ -343,7 +349,6 @@ inline Queue& get_or_create_thread_queue(const size_t queue_size
     static thread_local ThreadContextHandler context_handler(queue_size);
     return context_handler.get_queue();
 }
-
 }
 
 #endif

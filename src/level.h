@@ -6,7 +6,7 @@
 namespace papper
 {
 
-enum Level : uint8_t
+enum LogLevel : uint8_t
 {
     Trace,
     Debug,

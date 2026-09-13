@@ -19,9 +19,9 @@
 namespace papper::prefix
 {
 
-struct LogEventMetadata
+struct PrefixData
 {
-    Level level;
+    LogLevel level;
     std::chrono::time_point<std::chrono::system_clock> timestamp;
     const char* filename;
     const char* functionname;
@@ -313,19 +313,19 @@ consteval auto parse_pattern()
 
 // TODO: Remove this function and just write a custom formatter for
 // papper::Level
-constexpr std::string_view level_to_name(Level level)
+constexpr std::string_view level_to_name(LogLevel level)
 {
     switch (level)
     {
-    case Level::Trace:
+    case LogLevel::Trace:
         return "TRACE";
-    case Level::Debug:
+    case LogLevel::Debug:
         return "DEBUG";
-    case Level::Info:
+    case LogLevel::Info:
         return "INFO";
-    case Level::Warn:
+    case LogLevel::Warn:
         return "WARN";
-    case Level::Error:
+    case LogLevel::Error:
         return "ERROR";
     }
 }
@@ -334,7 +334,7 @@ constexpr std::string_view level_to_name(Level level)
 // adds a reference to the returned type, so rec entries aren't
 // actually copied
 template <PrefixField Field>
-constexpr decltype(auto) get_field(const LogEventMetadata& rec)
+constexpr decltype(auto) get_field(const PrefixData& rec)
 {
     if constexpr (Field == PrefixField::Level)
         return (level_to_name(rec.level));
@@ -395,7 +395,7 @@ class PrefixFormatterBase
 {
   public:
     virtual ~PrefixFormatterBase() = default;
-    virtual std::string format(const LogEventMetadata& rec) = 0;
+    virtual std::string format(const PrefixData& rec) = 0;
 };
 
 template <StaticString Pattern, size_t MaxFields = 16,
@@ -404,7 +404,7 @@ template <StaticString Pattern, size_t MaxFields = 16,
 class PrefixFormatter : public PrefixFormatterBase
 {
   public:
-    std::string format(const LogEventMetadata& rec) override
+    std::string format(const PrefixData& rec) override
     {
         return format_impl(
             rec, std::make_index_sequence<parsed_pattern.field_count>{});
@@ -434,8 +434,7 @@ class PrefixFormatter : public PrefixFormatterBase
                   "opening brace '{'");
 
     template <std::size_t... I>
-    std::string format_impl(const LogEventMetadata& rec,
-                            std::index_sequence<I...>)
+    std::string format_impl(const PrefixData& rec, std::index_sequence<I...>)
     {
         constexpr std::string_view fmt_sv = parsed_pattern.fmt_str_to_sv();
 
@@ -472,7 +471,7 @@ class PrefixFormatterHandler
             delete _formatter;
     }
 
-    std::string format(const LogEventMetadata& rec)
+    std::string format(const PrefixData& rec)
     {
         return _formatter->format(rec);
     }
