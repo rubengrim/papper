@@ -26,6 +26,7 @@ class Queue
           _end{ _capacity }
     {
         _buffer = new std::byte[_capacity];
+        memset(_buffer, 0, _capacity);
     }
 
     ~Queue()

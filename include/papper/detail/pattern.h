@@ -182,15 +182,12 @@ consteval void expand_spec_into_result(PatternFieldFormatSpec spec,
         expansion = "{}";
         break;
     case (PatternFieldFormatSpec::TimeHMS):
-        // expansion = "{:%H:%M:%OS}";
         expansion = "{}";
         break;
     case (PatternFieldFormatSpec::TimeHMSf):
-        // expansion = "{:%H:%M:%S}";
         expansion = "{}.{:06}";
         break;
     case (PatternFieldFormatSpec::TimeHMSF):
-        // expansion = "{:%H:%M:%S}";
         expansion = "{}.{:09}";
         break;
     case (PatternFieldFormatSpec::FileNameOnly):

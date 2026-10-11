@@ -35,6 +35,8 @@ int main(int argc, char** argv)
     if (options.mode == bench::Mode::Throughput)
         papper::set_default_queue_size((size_t)options.messages
                                        / options.threads * 128);
+    else if (options.mode == bench::Mode::Latency)
+        papper::set_default_queue_size(128 * 1024);
 
     // The default pattern is "[{time:HMSf}] ({level}) ({file:nameonly}:{line})
     // {message}", the other benchmarks use an equivalent one
