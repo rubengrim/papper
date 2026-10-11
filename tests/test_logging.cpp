@@ -19,13 +19,7 @@
 #include <unistd.h>
 #include <vector>
 
-// Included last since it defines macros such as log() and error()
 #include "papper/papper.h"
-
-// papper's log() macro clashes with doctest internals (ResultBuilder::log()),
-// so it's only enabled where it's used
-#pragma push_macro("log")
-#undef log
 
 using namespace std::chrono_literals;
 
@@ -73,7 +67,7 @@ class LogCapture
         while (std::chrono::steady_clock::now() < deadline)
         {
             // Retried since the marker may be dropped if the queue is full
-            error("{}", marker);
+            PAPPER_ERROR("{}", marker);
 
             const auto retry_at = std::chrono::steady_clock::now() + 100ms;
             while (std::chrono::steady_clock::now() < retry_at)
@@ -132,7 +126,7 @@ class LogCapture
 // A pattern without timestamps etc. so output can be compared exactly
 void set_simple_pattern()
 {
-    papper_set_pattern("{level}|{thread}|{m}");
+    PAPPER_SET_PATTERN("{level}|{thread}|{m}");
 }
 
 struct LevelGuard
@@ -147,11 +141,11 @@ struct LevelGuard
 
 TEST_CASE("logging: default pattern has local time, level, location and message")
 {
-    papper_set_pattern("[{time:HMSf}] ({level}) ({file:nameonly}:{line}) "
+    PAPPER_SET_PATTERN("[{time:HMSf}] ({level}) ({file:nameonly}:{line}) "
                        "{message}");
     LogCapture capture;
 
-    info("hello {}", 42);
+    PAPPER_INFO("hello {}", 42);
     capture.sync();
 
     const auto lines = capture.lines();
@@ -178,15 +172,11 @@ TEST_CASE("logging: every level macro logs with its level")
     set_simple_pattern();
     LogCapture capture;
 
-    trace("t");
-    debug("d");
-    info("i");
-    warn("w");
-    error("e");
-#pragma pop_macro("log")
-    log("l"); // Alias for trace
-#pragma push_macro("log")
-#undef log
+    PAPPER_TRACE("t");
+    PAPPER_DEBUG("d");
+    PAPPER_INFO("i");
+    PAPPER_WARN("w");
+    PAPPER_ERROR("e");
     capture.sync();
 
     CHECK(capture.lines()
@@ -194,24 +184,23 @@ TEST_CASE("logging: every level macro logs with its level")
                                        "DEBUG|main|d",
                                        "INFO|main|i",
                                        "WARN|main|w",
-                                       "ERROR|main|e",
-                                       "TRACE|main|l" });
+                                       "ERROR|main|e" });
 }
 
 TEST_CASE("logging: arguments of different types are formatted")
 {
-    papper_set_pattern("{m}");
+    PAPPER_SET_PATTERN("{m}");
     LogCapture capture;
 
-    info("no args");
-    info("{} {} {}", 1, -2, 3'000'000'000LL);
-    info("{:.2f} {}", 3.14159, true);
-    info("{}{}", 'a', 'b');
+    PAPPER_INFO("no args");
+    PAPPER_INFO("{} {} {}", 1, -2, 3'000'000'000LL);
+    PAPPER_INFO("{:.2f} {}", 3.14159, true);
+    PAPPER_INFO("{}{}", 'a', 'b');
     const std::string str = "a string";
-    info("[{}] [{}]", str, std::string("temporary"));
-    info("{} {} {}", 1, std::string("mixed"), 2.5);
-    info("{{literal braces}}");
-    info("{1} {0}", "first", "second");
+    PAPPER_INFO("[{}] [{}]", str, std::string("temporary"));
+    PAPPER_INFO("{} {} {}", 1, std::string("mixed"), 2.5);
+    PAPPER_INFO("{{literal braces}}");
+    PAPPER_INFO("{1} {0}", "first", "second");
     capture.sync();
 
     CHECK(capture.lines()
@@ -227,12 +216,12 @@ TEST_CASE("logging: arguments of different types are formatted")
 
 TEST_CASE("logging: string arguments are copied at the call site")
 {
-    papper_set_pattern("{m}");
+    PAPPER_SET_PATTERN("{m}");
     LogCapture capture;
 
     {
         std::string str = "original";
-        info("{}", str);
+        PAPPER_INFO("{}", str);
         str = "modified";
     }
     capture.sync();
@@ -247,18 +236,18 @@ TEST_CASE("logging: events below the minimum level are dropped")
     papper::set_level(papper::LogLevel::Warn);
     LogCapture capture;
 
-    trace("t");
-    debug("d");
-    info("i");
-    warn("w");
-    error("e");
+    PAPPER_TRACE("t");
+    PAPPER_DEBUG("d");
+    PAPPER_INFO("i");
+    PAPPER_WARN("w");
+    PAPPER_ERROR("e");
     capture.sync();
 
     CHECK(capture.lines()
           == std::vector<std::string>{ "WARN|main|w", "ERROR|main|e" });
 
     papper::set_level(papper::LogLevel::Trace);
-    trace("back to trace");
+    PAPPER_TRACE("back to trace");
     capture.sync();
     CHECK(capture.lines().back() == "TRACE|main|back to trace");
 }
@@ -270,11 +259,11 @@ TEST_CASE("logging: thread names")
 
     std::thread named([] {
         papper::init_thread("named-worker");
-        info("from named");
+        PAPPER_INFO("from named");
     });
     named.join();
 
-    std::thread unnamed([] { info("from unnamed"); });
+    std::thread unnamed([] { PAPPER_INFO("from unnamed"); });
     unnamed.join();
 
     const auto lines = capture.wait_for_lines(2);
@@ -292,7 +281,7 @@ TEST_CASE("logging: thread names")
 
 TEST_CASE("logging: many threads, no lost or reordered events")
 {
-    papper_set_pattern("{thread} {m}");
+    PAPPER_SET_PATTERN("{thread} {m}");
     LogCapture capture;
 
     constexpr int n_threads = 4;
@@ -306,7 +295,7 @@ TEST_CASE("logging: many threads, no lost or reordered events")
         threads.emplace_back([t] {
             papper::init_thread("w" + std::to_string(t));
             for (int i = 0; i < n_per_thread; ++i)
-                info("{} {}", i, std::string("payload"));
+                PAPPER_INFO("{} {}", i, std::string("payload"));
         });
     }
     for (auto& thread : threads)
@@ -343,14 +332,14 @@ TEST_CASE("logging: many threads, no lost or reordered events")
 
 TEST_CASE("logging: a full queue drops events without corrupting others")
 {
-    papper_set_pattern("{m}");
+    PAPPER_SET_PATTERN("{m}");
     LogCapture capture;
 
     constexpr int n = 20000;
     std::thread worker([&] {
         papper::init_thread("tiny", 512);
         for (int i = 0; i < n; ++i)
-            info("{} {}", i, std::string("some payload to fill the queue"));
+            PAPPER_INFO("{} {}", i, std::string("some payload to fill the queue"));
         // Later events must still get through once there is room again
         capture.sync();
     });
@@ -379,14 +368,14 @@ TEST_CASE("logging: a full queue drops events without corrupting others")
 
 TEST_CASE("logging: switching sinks redirects output")
 {
-    papper_set_pattern("{m}");
+    PAPPER_SET_PATTERN("{m}");
 
     LogCapture first;
-    info("to first");
+    PAPPER_INFO("to first");
     first.sync();
 
     LogCapture second;
-    info("to second");
+    PAPPER_INFO("to second");
     second.sync();
 
     CHECK(first.lines() == std::vector<std::string>{ "to first" });

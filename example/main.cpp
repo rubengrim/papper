@@ -2,5 +2,9 @@
 
 int main()
 {
-    trace("Hello ");
+    PAPPER_TRACE("Hello {}", 1);
+
+    LOG_TRACE("Hello {}", 1);
+
+    TRACE("Hello {}", 1);
 }

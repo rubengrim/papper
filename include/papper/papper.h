@@ -62,26 +62,56 @@ inline void set_level(const LogLevel level)
 
 // clang-format off
 
-#define trace(fmt_str, ...)                                                    \
-    log_impl(papper::LogLevel::Trace, fmt_str __VA_OPT__(, ) __VA_ARGS__)
+#define PAPPER_TRACE(fmt_str, ...) \
+    PAPPER_LOG_IMPL(papper::LogLevel::Trace, fmt_str __VA_OPT__(, ) __VA_ARGS__)
 
-#define info(fmt_str, ...)                                                     \
-    log_impl(papper::LogLevel::Info, fmt_str __VA_OPT__(, ) __VA_ARGS__)
+#define PAPPER_INFO(fmt_str, ...) \
+    PAPPER_LOG_IMPL(papper::LogLevel::Info, fmt_str __VA_OPT__(, ) __VA_ARGS__)
 
-#define debug(fmt_str, ...)                                                    \
-    log_impl(papper::LogLevel::Debug, fmt_str __VA_OPT__(, ) __VA_ARGS__)
+#define PAPPER_DEBUG(fmt_str, ...) \
+    PAPPER_LOG_IMPL(papper::LogLevel::Debug, fmt_str __VA_OPT__(, ) __VA_ARGS__)
 
-#define warn(fmt_str, ...)                                                     \
-    log_impl(papper::LogLevel::Warn, fmt_str __VA_OPT__(, ) __VA_ARGS__)
+#define PAPPER_WARN(fmt_str, ...) \
+    PAPPER_LOG_IMPL(papper::LogLevel::Warn, fmt_str __VA_OPT__(, ) __VA_ARGS__)
 
-#define error(fmt_str, ...)                                                    \
-    log_impl(papper::LogLevel::Error, fmt_str __VA_OPT__(, ) __VA_ARGS__)
+#define PAPPER_ERROR(fmt_str, ...) \
+    PAPPER_LOG_IMPL(papper::LogLevel::Error, fmt_str __VA_OPT__(, ) __VA_ARGS__)
 
-// log() is alias for trace()
-#define log(fmt_str, ...)                                                      \
-    trace(fmt_str __VA_OPT__(, ) __VA_ARGS__)
+#ifdef PAPPER_DEFINE_SHORT_NAMES
+#define LOG_TRACE(fmt_str, ...) \
+    PAPPER_TRACE(fmt_str  __VA_OPT__(, ) __VA_ARGS__)
 
-#define papper_set_pattern(pattern)                                            \
+#define LOG_INFO(fmt_str, ...) \
+    PAPPER_INFO(fmt_str  __VA_OPT__(, ) __VA_ARGS__)
+
+#define LOG_DEBUG(fmt_str, ...) \
+    PAPPER_DEBUG(fmt_str  __VA_OPT__(, ) __VA_ARGS__)
+
+#define LOG_WARN(fmt_str, ...) \
+    PAPPER_WARN(fmt_str  __VA_OPT__(, ) __VA_ARGS__)
+
+#define LOG_ERROR(fmt_str, ...) \
+    PAPPER_ERROR(fmt_str  __VA_OPT__(, ) __VA_ARGS__)
+#endif
+
+#ifdef PAPPER_DEFINE_VERY_SHORT_NAMES
+#define TRACE(fmt_str, ...) \
+    PAPPER_TRACE(fmt_str  __VA_OPT__(, ) __VA_ARGS__)
+
+#define INFO(fmt_str, ...) \
+    PAPPER_INFO(fmt_str  __VA_OPT__(, ) __VA_ARGS__)
+
+#define DEBUG(fmt_str, ...) \
+    PAPPER_DEBUG(fmt_str  __VA_OPT__(, ) __VA_ARGS__)
+
+#define WARN(fmt_str, ...) \
+    PAPPER_WARN(fmt_str  __VA_OPT__(, ) __VA_ARGS__)
+
+#define ERROR(fmt_str, ...) \
+    PAPPER_ERROR(fmt_str  __VA_OPT__(, ) __VA_ARGS__)
+#endif
+
+#define PAPPER_SET_PATTERN(pattern)                                            \
 {                                                                              \
     papper::detail::PatternFormatterBase* fmt                                  \
         = new papper::detail::PatternFormatter<pattern>;                       \
@@ -91,7 +121,7 @@ inline void set_level(const LogLevel level)
 
 // Use this if you need more fields, or if the expanded internal format
 // string length reaches its max
-#define papper_set_long_pattern(pattern, max_fields, max_expanded_fmt_str_len) \
+#define PAPPER_SET_LONG_PATTERN(pattern, max_fields, max_expanded_fmt_str_len) \
 {                                                                              \
     papper::detail::PatternFormatterBase* fmt = new papper::detail::           \
         PatternFormatter<pattern, max_fields, max_expanded_fmt_str_len>;       \

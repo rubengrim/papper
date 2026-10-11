@@ -438,7 +438,7 @@ void push_log_event(const CallSiteStaticData* static_data, Args&&... args)
 } // end namespace papper::detail
 
 // clang-format off
-#define log_impl(level, fmt_str, ...)                                       \
+#define PAPPER_LOG_IMPL(level, fmt_str, ...)                                \
 {                                                                           \
     static constexpr papper::detail::CallSiteStaticData static_data = {     \
         level,                                                              \
