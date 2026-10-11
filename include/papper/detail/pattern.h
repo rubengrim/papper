@@ -5,12 +5,10 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
-#include <iostream>
 #include <iterator>
 #include <string>
 #include <string_view>
 #include <tuple>
-#include <unordered_map>
 #include <utility>
 
 #include <fmt/chrono.h>
@@ -184,13 +182,16 @@ consteval void expand_spec_into_result(PatternFieldFormatSpec spec,
         expansion = "{}";
         break;
     case (PatternFieldFormatSpec::TimeHMS):
-        expansion = "{:%H:%M:%OS}";
+        // expansion = "{:%H:%M:%OS}";
+        expansion = "{}";
         break;
     case (PatternFieldFormatSpec::TimeHMSf):
-        expansion = "{:%H:%M:%S}";
+        // expansion = "{:%H:%M:%S}";
+        expansion = "{}.{:06}";
         break;
     case (PatternFieldFormatSpec::TimeHMSF):
-        expansion = "{:%H:%M:%S}";
+        // expansion = "{:%H:%M:%S}";
+        expansion = "{}.{:09}";
         break;
     case (PatternFieldFormatSpec::FileNameOnly):
         expansion = "{}";
@@ -364,6 +365,45 @@ constexpr decltype(auto) get_field(const PatternData& data)
                       "field is invalid"); // Should be unreachable
 }
 
+template <PatternFieldFormatSpec Spec>
+inline auto
+process_time_arg(const std::chrono::sys_time<std::chrono::nanoseconds>& arg)
+{
+    static constinit std::string HMS_part = "";
+    static constinit auto last_update
+        = std::chrono::sys_time<std::chrono::seconds>(
+            std::chrono::seconds(-1));
+
+    // Floor to whole seconds, fmt prints sub-second digits for %S/%OS
+    // when the time_point has a finer precision than seconds
+    const auto arg_s = std::chrono::floor<std::chrono::seconds>(arg);
+    if (arg_s != last_update)
+    {
+        HMS_part.clear();
+        fmt::format_to(std::back_inserter(HMS_part), "{:%H:%M:%S}", arg_s);
+        last_update = arg_s;
+    }
+
+    if constexpr (Spec == PatternFieldFormatSpec::TimeHMS)
+    {
+        return std::make_tuple(HMS_part);
+    }
+    else if constexpr (Spec == PatternFieldFormatSpec::TimeHMSf)
+    {
+        uint64_t us_part
+            = std::chrono::floor<std::chrono::microseconds>(
+                  (arg.time_since_epoch() % std::chrono::seconds(1)))
+                  .count();
+        return std::make_tuple(HMS_part, us_part);
+    }
+    else if constexpr (Spec == PatternFieldFormatSpec::TimeHMSF)
+    {
+        uint64_t ns_part
+            = (arg.time_since_epoch() % std::chrono::seconds(1)).count();
+        return std::make_tuple(HMS_part, ns_part);
+    }
+}
+
 // For some specs the arg has to be expanded into multiple args or
 // converted somehow Returns a tuple with the expanded args
 template <PatternFieldFormatSpec Spec, typename T>
@@ -373,21 +413,17 @@ auto expand_and_process_format_arg(const T& arg)
     {
         return std::make_tuple(arg);
     }
-    // The timestamp has already been shifted to local time by the Clock, so
-    // the time specs only need to set the precision of the seconds field
     else if constexpr (Spec == PatternFieldFormatSpec::TimeHMS)
     {
-        return std::make_tuple(std::chrono::floor<std::chrono::seconds>(arg));
+        return process_time_arg<Spec>(arg);
     }
     else if constexpr (Spec == PatternFieldFormatSpec::TimeHMSf)
     {
-        return std::make_tuple(
-            std::chrono::floor<std::chrono::microseconds>(arg));
+        return process_time_arg<Spec>(arg);
     }
     else if constexpr (Spec == PatternFieldFormatSpec::TimeHMSF)
     {
-        return std::make_tuple(
-            std::chrono::floor<std::chrono::nanoseconds>(arg));
+        return process_time_arg<Spec>(arg);
     }
     else if constexpr (Spec == PatternFieldFormatSpec::FileNameOnly)
     {

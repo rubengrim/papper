@@ -21,6 +21,8 @@ int main()
 {
     std::atexit(finish);
 
+    // PAPPER_SET_PATTERN("{time:HMSF} {message}");
+
     if (papper::set_sink(
             "test.log", true, papper::FlushOn::BufferFull, 64 * 1024)
         != 0)
@@ -39,9 +41,16 @@ int main()
 
     // std::this_thread::sleep_for(std::chrono::seconds(1));
 
+    std::string s = "hej";
     begin = c.read_timestamp_ns();
     for (size_t i = 0; i < n_messages; i++)
     {
-        TRACE("message {}", i);
+        PAPPER_INFO("Logging int: {}, double: {:.3f}, string: {}", i, 0.4, s);
     }
+
+    // for (int i = 0; i < 100; i++)
+    // {
+    //     TRACE("hej ");
+    //     std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    // }
 }

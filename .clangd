@@ -1,4 +1,6 @@
 CompileFlags:
+  # Borrow from example because papper is header only
+  CompilationDatabase: example/build
   Add: [
     -Wall,
     -Wextra,
