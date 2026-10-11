@@ -240,7 +240,7 @@ class Backend
             .level = header.static_data->level,
             .thread_name = header.thread_name,
             .timestamp
-            = _timestamp_converter.timestamp_to_system_time(header.timestamp),
+            = _clock.timestamp_to_local_system_time(header.timestamp),
             .filename = header.static_data->location.file_name(),
             .functionname = header.static_data->location.function_name(),
             .linenumber = header.static_data->location.line(),
@@ -253,6 +253,8 @@ class Backend
         return true;
     }
 
+    // Polls all thread queues once for new log events
+    // Returns number of events processed
     int poll_threads_once()
     {
         int n_events_processed = 0;
@@ -284,39 +286,58 @@ class Backend
 
     Backend()
     {
-        if (!_timestamp_converter.init())
+        if (!_clock.init())
         {
-            throw std::runtime_error(
-                "CPU does not have an invariant TSC. "
-                "Fallback to std::chrono::steady_clock "
-                "is no implemented yet, so papper can't run on this machine.");
+            throw std::runtime_error("CPU does not have an invariant TSC. "
+                                     "A fallback is no implemented, so papper "
+                                     "can't run on this machine yet.");
         }
 
         _running.store(true, std::memory_order_relaxed);
         _backend_thread = std::thread([this]() {
-            uint64_t backoff_Ms = 1;
-            // TODO: Interface for user to change this
-            constexpr uint64_t max_backoff_Ms = 1000;
+            uint32_t backoff_us = 1;
+            // TODO: Let user to change this
+            const uint32_t max_backoff_us = 1000;
+
+            const double resync_utc_offset_interval_ns = 1e6 * 1000.0;
+            const double resync_to_system_clock_interval_ns = 1e6 * 100.0;
+
+            double last_utc_offset_resync = 0;
+            double last_system_clock_resync = 0;
 
             while (_running.load(std::memory_order_acquire))
             {
                 _sink.poll_for_pending_sink_switch();
                 _pattern_formatter.poll_for_pending_formatter_switch();
-                _timestamp_converter
-                    .sync_to_system_clock(); // Do this less often?
+
+                double now = _clock.read_timestamp_ns();
+                if (now - last_utc_offset_resync
+                    > resync_utc_offset_interval_ns)
+                {
+                    _clock.recalculate_utc_offset();
+                    last_utc_offset_resync = now;
+                }
+
+                now = _clock.read_timestamp_ns();
+                if (now - last_system_clock_resync
+                    > resync_to_system_clock_interval_ns)
+                {
+                    _clock.sync_to_system_clock();
+                    last_system_clock_resync = now;
+                }
 
                 if (poll_threads_once() > 0)
                 {
                     // Reset backoff if there were events to process
-                    backoff_Ms = 1;
+                    backoff_us = 1;
                 }
                 else
                 {
                     // Double the backoff each time there were no events, up to
                     // max_backoff
                     std::this_thread::sleep_for(
-                        std::chrono::microseconds(backoff_Ms));
-                    backoff_Ms = std::min(backoff_Ms * 2, max_backoff_Ms);
+                        std::chrono::microseconds(backoff_us));
+                    backoff_us = std::min(backoff_us * 2, max_backoff_us);
                 }
             }
 
@@ -325,6 +346,8 @@ class Backend
             while (_head.load(std::memory_order_acquire) != nullptr)
             {
                 poll_threads_once();
+                _clock.sync_to_system_clock();
+                _clock.recalculate_utc_offset();
             }
         });
     }
@@ -335,7 +358,7 @@ class Backend
     SinkHandler _sink;
     PatternFormatterHandler _pattern_formatter;
     std::atomic<LogLevel> min_log_level = LogLevel::Trace;
-    Clock _timestamp_converter;
+    Clock _clock;
     std::thread _backend_thread;
 };
 

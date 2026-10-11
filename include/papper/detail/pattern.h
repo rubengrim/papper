@@ -38,7 +38,7 @@ struct PatternData
 {
     LogLevel level;
     const char* thread_name;
-    std::chrono::time_point<std::chrono::system_clock> timestamp;
+    std::chrono::sys_time<std::chrono::nanoseconds> timestamp;
     const char* filename;
     const char* functionname;
     uint32_t linenumber;
@@ -366,30 +366,25 @@ constexpr decltype(auto) get_field(const PatternData& data)
 template <PatternFieldFormatSpec Spec, typename T>
 auto expand_and_process_format_arg(const T& arg)
 {
-
     if constexpr (Spec == PatternFieldFormatSpec::None)
     {
         return std::make_tuple(arg);
     }
+    // The timestamp has already been shifted to local time by the Clock, so
+    // the time specs only need to set the precision of the seconds field
     else if constexpr (Spec == PatternFieldFormatSpec::TimeHMS)
     {
-        static auto tz = std::chrono::current_zone();
-        auto local_timepoint = tz->to_local(arg);
-        return std::make_tuple(local_timepoint);
+        return std::make_tuple(std::chrono::floor<std::chrono::seconds>(arg));
     }
     else if constexpr (Spec == PatternFieldFormatSpec::TimeHMSf)
     {
-        static auto tz = std::chrono::current_zone();
-        auto local_timepoint = tz->to_local(arg);
-        auto us = std::chrono::time_point_cast<std::chrono::microseconds>(
-            local_timepoint);
-        return std::make_tuple(us);
+        return std::make_tuple(
+            std::chrono::floor<std::chrono::microseconds>(arg));
     }
     else if constexpr (Spec == PatternFieldFormatSpec::TimeHMSF)
     {
-        static auto tz = std::chrono::current_zone();
-        auto local_timepoint = tz->to_local(arg);
-        return std::make_tuple(local_timepoint);
+        return std::make_tuple(
+            std::chrono::floor<std::chrono::nanoseconds>(arg));
     }
     else if constexpr (Spec == PatternFieldFormatSpec::FileNameOnly)
     {
@@ -459,6 +454,7 @@ class PatternFormatter : public PatternFormatterBase
     }
 };
 
+// Wrapper to handle runtime switching of formatter
 class PatternFormatterHandler
 {
   public:

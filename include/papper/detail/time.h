@@ -297,7 +297,7 @@ inline bool get_tsc_ns_per_tick(double& tick_time)
 }
 #endif
 
-// This is not thread safe, is only meant to be used by backend
+// This is not thread safe, it's only meant to be used by backend
 class Clock
 {
   public:
@@ -308,8 +308,28 @@ class Clock
         if (!get_tsc_ns_per_tick(_ns_per_tick))
             return false; // cpu does not have invariant tsc
 
+        recalculate_utc_offset();
         sync_to_system_clock();
         return true;
+    }
+
+    void recalculate_utc_offset()
+    {
+        std::time_t t = std::time(nullptr);
+        std::tm local = *std::localtime(&t);
+        std::tm utc = *std::gmtime(&t);
+
+        int day_diff;
+        if (local.tm_year != utc.tm_year)
+            day_diff = local.tm_year > utc.tm_year ? 1 : -1;
+        else
+            day_diff = local.tm_yday - utc.tm_yday;
+
+        _utc_offset_ns
+            = 1'000'000'000LL
+              * (day_diff * 86400L + (local.tm_hour - utc.tm_hour) * 3600L
+                 + (local.tm_min - utc.tm_min) * 60L
+                 + (local.tm_sec - utc.tm_sec));
     }
 
     void sync_to_system_clock()
@@ -328,28 +348,27 @@ class Clock
         _sync_point = SyncPoint{ .ts = avg, .system_time = t };
     }
 
-    // Convert timestamp (i.e. ticks since system startup) to wall
-    // clock time
-    std::chrono::system_clock::time_point
-    timestamp_to_system_time(const uint64_t ts)
+    // Convert timestamp (ticks since system startup) to local wall clock time
+    std::chrono::sys_time<std::chrono::nanoseconds>
+    timestamp_to_local_system_time(const uint64_t ts)
     {
         double ns_since_sync
             = _ns_per_tick * (double)((int64_t)(ts - _sync_point.ts));
 
-        auto result_ns
-            = std::chrono::time_point_cast<std::chrono::nanoseconds>(
-                  _sync_point.system_time)
-              + std::chrono::nanoseconds((int64_t)ns_since_sync);
+        return std::chrono::time_point_cast<std::chrono::nanoseconds>(
+                   _sync_point.system_time)
+               + std::chrono::nanoseconds((int64_t)ns_since_sync
+                                          + _utc_offset_ns);
+    }
 
-        // On apple's libc the system clock has microsecond duration, so for
-        // portability, cast to the system's duration
-        return std::chrono::time_point_cast<
-            std::chrono::system_clock::duration>(result_ns);
+    double read_timestamp_ns()
+    {
+        return _ns_per_tick * read_tsc();
     }
 
   private:
     // Stores the system time together with the value of the tsc at that same
-    // time point, so that another timestamp can be converted to actual wall
+    // time point, so that another tsc value can be converted to actual wall
     // clock time
     struct SyncPoint
     {
@@ -358,7 +377,8 @@ class Clock
     };
 
     SyncPoint _sync_point;
-    double _ns_per_tick = 0;
+    int64_t _utc_offset_ns;
+    double _ns_per_tick;
 };
 
 }

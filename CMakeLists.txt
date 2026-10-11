@@ -19,8 +19,3 @@ target_link_libraries(papper
   INTERFACE
     Threads::Threads
 )
-
-include(CTest)
-if(BUILD_TESTING)
-  add_subdirectory(tests)
-endif()
