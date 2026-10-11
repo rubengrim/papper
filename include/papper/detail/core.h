@@ -4,7 +4,6 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
-#include <format>
 #include <iostream>
 #include <memory>
 
@@ -16,6 +15,8 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
+
+#include <fmt/format.h>
 
 #include "codec.h"
 #include "level.h"
@@ -50,7 +51,7 @@ std::string decode_and_format(const char* fmt_str, const std::byte* args_data)
     // Format
     return std::apply(
         [&](auto&&... v) {
-            return std::vformat(fmt_str, std::make_format_args(v...));
+            return fmt::vformat(fmt_str, fmt::make_format_args(v...));
         },
         args);
 }

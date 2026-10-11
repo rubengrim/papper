@@ -5,13 +5,16 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
-#include <format>
 #include <iostream>
+#include <iterator>
 #include <string>
 #include <string_view>
 #include <tuple>
 #include <unordered_map>
 #include <utility>
+
+#include <fmt/chrono.h>
+#include <fmt/format.h>
 
 #include "level.h"
 
@@ -220,7 +223,7 @@ consteval auto parse_pattern()
             // Check for escape sequence '{{'
             if (i + 1 < size && Pattern.data[i + 1] == '{')
             {
-                // Forward escape sequence to std::vformat
+                // Forward escape sequence to fmt::vformat
                 push_char('{');
                 push_char('{');
                 i += 2;
@@ -412,43 +415,43 @@ class PatternFormatter : public PatternFormatterBase
     std::string format(const PatternData& data) override
     {
         return format_impl(
-            data, std::make_index_sequence<parsed_pattern.field_count>{});
+            data, std::make_index_sequence<_parsed_pattern.field_count>{});
     }
 
   private:
-    static constexpr ParsedPattern<MaxFmtStrLen, MaxFields> parsed_pattern
+    static constexpr ParsedPattern<MaxFmtStrLen, MaxFields> _parsed_pattern
         = parse_pattern<Pattern, MaxFields, MaxFmtStrLen>();
 
     // Asserts for nicer error msgs
-    static_assert(parsed_pattern.error != ParsingError::UnterminatedBrace,
+    static_assert(_parsed_pattern.error != ParsingError::UnterminatedBrace,
                   "pattern contains unterminated '{'");
-    static_assert(parsed_pattern.error != ParsingError::EmptyFieldName,
+    static_assert(_parsed_pattern.error != ParsingError::EmptyFieldName,
                   "pattern contains empty '{}'");
-    static_assert(parsed_pattern.error != ParsingError::UnknownFieldName,
+    static_assert(_parsed_pattern.error != ParsingError::UnknownFieldName,
                   "pattern contains unknown field name");
-    static_assert(parsed_pattern.error != ParsingError::UnknownFormatSpec,
+    static_assert(_parsed_pattern.error != ParsingError::UnknownFormatSpec,
                   "pattern contains unknown format spec");
-    static_assert(parsed_pattern.error != ParsingError::InvalidSpecUsage,
+    static_assert(_parsed_pattern.error != ParsingError::InvalidSpecUsage,
                   "pattern contains invalid field/spec combination");
-    static_assert(parsed_pattern.error != ParsingError::TooManyFields,
+    static_assert(_parsed_pattern.error != ParsingError::TooManyFields,
                   "pattern contains too many fields (use "
                   "papper_set_long_pattern() instead)");
-    static_assert(parsed_pattern.error != ParsingError::UnmatchedClosingBrace,
+    static_assert(_parsed_pattern.error != ParsingError::UnmatchedClosingBrace,
                   "pattern contains '}' with no matching "
                   "opening brace '{'");
 
     template <std::size_t... I>
     std::string format_impl(const PatternData& data, std::index_sequence<I...>)
     {
-        constexpr std::string_view fmt_sv = parsed_pattern.fmt_str_to_sv();
+        constexpr std::string_view fmt_sv = _parsed_pattern.fmt_str_to_sv();
 
         auto args = std::tuple_cat(
-            expand_and_process_format_arg<parsed_pattern.specs[I]>(
-                get_field<parsed_pattern.fields[I]>(data))...);
+            expand_and_process_format_arg<_parsed_pattern.specs[I]>(
+                get_field<_parsed_pattern.fields[I]>(data))...);
 
         return std::apply(
             [&fmt_sv](auto... x) {
-                return std::vformat(fmt_sv, std::make_format_args(x...));
+                return fmt::vformat(fmt_sv, fmt::make_format_args(x...));
             },
             args);
     }
