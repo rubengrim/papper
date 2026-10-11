@@ -144,6 +144,7 @@ class Queue
     const size_t _capacity;
     const size_t _wrap_mask;
 
+    // TODO: Some of these aligned vars can be put on the same cache line
     std::byte* _buffer;
     alignas(_cache_line_len) std::atomic<size_t> _r = 0;
     alignas(_cache_line_len) std::atomic<size_t> _w = 0;

@@ -55,12 +55,16 @@ std::string decode_and_format(const char* fmt_str, const std::byte* args_data)
         args);
 }
 
-// Wrapper so that decode_and_format can be correctly specialized from a macro
 template <typename... Args>
-consteval auto get_decoding_function(Args&&...)
+struct DecodingFunction
 {
-    return &decode_and_format<std::remove_cvref_t<Args>...>;
-}
+    static constexpr auto value = &decode_and_format<Args...>;
+};
+
+// Wrapper so that decode_and_format can be specialized from a macro
+template <typename... Args>
+DecodingFunction<std::remove_cvref_t<Args>...>
+get_decoding_function(Args&&...);
 
 struct CallSiteStaticData
 {
@@ -297,7 +301,7 @@ class Backend
         _backend_thread = std::thread([this]() {
             uint32_t backoff_us = 1;
             // TODO: Let user to change this
-            const uint32_t max_backoff_us = 1000;
+            const uint32_t max_backoff_us = 100;
 
             const double resync_utc_offset_interval_ns = 1e6 * 1000.0;
             const double resync_to_system_clock_interval_ns = 1e6 * 100.0;
@@ -405,7 +409,12 @@ get_or_create_thread_queue(std::string_view thread_name = "",
 template <typename... Args>
 void push_log_event(const CallSiteStaticData* static_data, Args&&... args)
 {
-    static thread_local auto [thread_name, q] = get_or_create_thread_queue();
+    static thread_local constinit std::pair<const char*, Queue*> t{};
+    if (t.second == nullptr) [[unlikely]]
+    {
+        t = get_or_create_thread_queue();
+    }
+    auto& [thread_name, q] = t;
 
     size_t total_args_size = 0;
     if constexpr (sizeof...(args) > 0)
@@ -443,7 +452,7 @@ void push_log_event(const CallSiteStaticData* static_data, Args&&... args)
     static constexpr papper::detail::CallSiteStaticData static_data = {     \
         level,                                                              \
         fmt_str,                                                            \
-        papper::detail::get_decoding_function(__VA_ARGS__),                 \
+        decltype(papper::detail::get_decoding_function(__VA_ARGS__))::value,\
         std::source_location::current(),                                    \
     };                                                                      \
     papper::detail::push_log_event(&static_data __VA_OPT__(,) __VA_ARGS__); \
