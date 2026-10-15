@@ -20,11 +20,8 @@ int main(int argc, char** argv)
 
     auto init_thread = [] {};
     auto log = [&logger](int i, double d, const std::string& s) {
-        SPDLOG_LOGGER_INFO(logger,
-                           "Logging int: {}, double: {:.3f}, string: {}",
-                           i,
-                           d,
-                           s);
+        SPDLOG_LOGGER_INFO(
+            logger, "Logging int: {}, double: {:.3f}, string: {}", i, d, s);
     };
 
     bench::Clock::time_point start;

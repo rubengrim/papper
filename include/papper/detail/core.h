@@ -251,9 +251,10 @@ class Backend
             .linenumber = header.static_data->location.line(),
             .message = message,
         };
-        std::string prefix = _pattern_formatter.format(pattern_data);
+        std::string formatted_message
+            = _pattern_formatter.format(pattern_data);
 
-        _sink.write_str_and_endl(prefix);
+        _sink.write_str_and_endl(formatted_message);
 
         return true;
     }
@@ -310,11 +311,7 @@ class Backend
             double last_utc_offset_resync = 0;
             double last_system_clock_resync = 0;
 
-            while (_running.load(std::memory_order_acquire))
-            {
-                _sink.poll_for_pending_sink_switch();
-                _pattern_formatter.poll_for_pending_formatter_switch();
-
+            auto resync_clock = [&]() {
                 double now = _clock.read_timestamp_ns();
                 if (now - last_utc_offset_resync
                     > resync_utc_offset_interval_ns)
@@ -330,6 +327,14 @@ class Backend
                     _clock.sync_to_system_clock();
                     last_system_clock_resync = now;
                 }
+            };
+
+            while (_running.load(std::memory_order_acquire))
+            {
+                _sink.poll_for_pending_sink_switch();
+                _pattern_formatter.poll_for_pending_formatter_switch();
+
+                resync_clock();
 
                 if (poll_threads_once() > 0)
                 {
@@ -350,9 +355,8 @@ class Backend
             // deleted
             while (_head.load(std::memory_order_acquire) != nullptr)
             {
+                resync_clock();
                 poll_threads_once();
-                _clock.sync_to_system_clock();
-                _clock.recalculate_utc_offset();
             }
         });
     }
@@ -408,7 +412,8 @@ get_or_create_thread_queue(std::string_view thread_name = "",
 }
 
 template <typename... Args>
-void push_log_event(const CallSiteStaticData* static_data, Args&&... args)
+[[gnu::noinline]] void push_log_event(const CallSiteStaticData* static_data,
+                                      Args&&... args)
 {
     static thread_local constinit std::pair<const char*, Queue*> t{};
     if (t.second == nullptr) [[unlikely]]

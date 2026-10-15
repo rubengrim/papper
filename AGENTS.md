@@ -1,1 +1,1 @@
-papper is a low latency async logging framework
+papper is a low latency async logging library

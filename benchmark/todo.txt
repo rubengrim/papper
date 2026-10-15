@@ -1,0 +1,1 @@
+Try to optimize by making backend copy all available log events from a given queue into a local buffer, and then commiting the read once instead of for every log event. Might make frontend faster. Backend could either get slower or faster idk

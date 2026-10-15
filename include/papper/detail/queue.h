@@ -6,17 +6,22 @@
 #include <cstdio>
 #include <cstring>
 #include <new>
-#include <optional>
-#include <stdexcept>
-#include <utility>
 
 namespace papper::detail
 {
 
 class Queue
 {
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Winterference-size"
+#endif
+    // static constexpr size_t _cache_line_len = 128;
     static constexpr size_t _cache_line_len
         = std::hardware_destructive_interference_size;
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 
   public:
     Queue(const size_t capacity)
@@ -145,12 +150,19 @@ class Queue
     const size_t _capacity;
     const size_t _wrap_mask;
 
-    // TODO: Some of these aligned vars can be put on the same cache line
     std::byte* _buffer;
     alignas(_cache_line_len) std::atomic<size_t> _r = 0;
     alignas(_cache_line_len) std::atomic<size_t> _w = 0;
+
     alignas(_cache_line_len) size_t _cached_r = 0;
+    // When memory is reserved, this index is set to where _w should be
+    // after the write is commited
+    size_t _future_write_pos = 0;
+
     alignas(_cache_line_len) size_t _cached_w = 0;
+    // When memory is reserved, this index is set to where _r should be
+    // after the read is commited
+    size_t _future_read_pos = 0;
 
     // Set by the writer when it wraps so the reader knows not to read after
     // this point.
@@ -159,13 +171,6 @@ class Queue
     // wrapped and wrote at the buffer beginning (because it writes header +
     // payload in one call, while reader reads header first and then payload)
     alignas(_cache_line_len) std::atomic<size_t> _end;
-
-    // When memory is reserved, these indices are set to where _w/_r should be
-    // set to after the write/read is commited
-    // TODO: Put this logic in some RAII wrapper for safer and easier queue
-    // access
-    alignas(_cache_line_len) size_t _future_write_pos = 0;
-    alignas(_cache_line_len) size_t _future_read_pos = 0;
 };
 
 }

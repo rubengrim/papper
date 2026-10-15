@@ -1,5 +1,5 @@
 CompileFlags:
-  # Borrow from example because papper is header only
+  # Use database from example because papper is header only
   CompilationDatabase: example/build
   Add: [
     -Wall,

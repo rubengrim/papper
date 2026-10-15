@@ -5,20 +5,25 @@
 #include "quill/LogMacros.h"
 #include "quill/Logger.h"
 #include "quill/sinks/FileSink.h"
+#include <chrono>
+#include <thread>
 
-int main(int argc, char** argv)
+// Same queue size as papper uses in latency mode, without growing it
+struct LatencyFrontendOptions : quill::FrontendOptions
 {
-    const bench::Options options = bench::parse_args(argc, argv, "quill");
+    static constexpr quill::QueueType queue_type
+        = quill::QueueType::BoundedDropping;
+    static constexpr size_t initial_queue_capacity = 256 * 1024;
+};
 
-    // Don't print a notice each time a queue grows, but keep real errors
-    quill::BackendOptions backend_options;
-    backend_options.error_notifier = [](const std::string& message) {
-        if (message.find("Allocated a new SPSC queue") == std::string::npos)
-            std::fprintf(stderr, "%s\n", message.c_str());
-    };
-    quill::Backend::start(backend_options);
+// Frontend options are compile time, so the setup is templated on them
+template <typename FrontendOptions>
+void run(const bench::Options& options)
+{
+    using Frontend = quill::FrontendImpl<FrontendOptions>;
+    using Logger = quill::LoggerImpl<FrontendOptions>;
 
-    auto sink = quill::Frontend::create_or_get_sink<quill::FileSink>(
+    auto sink = Frontend::template create_or_get_sink<quill::FileSink>(
         options.log_file,
         [] {
             quill::FileSinkConfig config;
@@ -29,7 +34,7 @@ int main(int argc, char** argv)
         quill::FileEventNotifier{});
 
     // Equivalent to papper's default pattern
-    quill::Logger* logger = quill::Frontend::create_or_get_logger(
+    Logger* logger = Frontend::create_or_get_logger(
         "bench",
         std::move(sink),
         quill::PatternFormatterOptions{
@@ -38,9 +43,10 @@ int main(int argc, char** argv)
             "%H:%M:%S.%Qus" });
 
     // Allocates the thread's queue up front
-    auto init_thread = [] { quill::Frontend::preallocate(); };
+    auto init_thread = [] { Frontend::preallocate(); };
     auto log = [logger](int i, double d, const std::string& s) {
-        LOG_INFO(logger, "Logging int: {}, double: {:.3f}, string: {}", i, d, s);
+        LOG_INFO(
+            logger, "Logging int: {}, double: {:.3f}, string: {}", i, d, s);
     };
 
     if (options.mode == bench::Mode::Latency)
@@ -56,4 +62,25 @@ int main(int argc, char** argv)
     }
 
     bench::check_log_file(options);
+}
+
+int main(int argc, char** argv)
+{
+    const bench::Options options = bench::parse_args(argc, argv, "quill");
+
+    // Don't print a notice each time a queue grows, but keep real errors
+    quill::BackendOptions backend_options;
+    backend_options.error_notifier = [](const std::string& message) {
+        if (message.find("Allocated a new SPSC queue") == std::string::npos)
+            std::fprintf(stderr, "%s\n", message.c_str());
+    };
+    quill::Backend::start(backend_options);
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+
+    // Throughput keeps the default growing queue so that no messages are
+    // dropped, like papper which sizes its queue to hold every message
+    if (options.mode == bench::Mode::Latency)
+        run<LatencyFrontendOptions>(options);
+    else
+        run<quill::FrontendOptions>(options);
 }

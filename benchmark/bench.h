@@ -51,7 +51,7 @@ struct Options
     // within a burst: the CPU overlaps consecutive calls, so it is lower than
     // the latency of a single isolated call. Use --burst-size 1 where the
     // clock is precise enough to time single calls.
-    int bursts = 10000;
+    int bursts = 2000;
     int burst_size = 100;
     int pause_us = 1000;
 
