@@ -77,6 +77,12 @@ struct LogEventHeader
     size_t payload_size;
 };
 
+// // push_log_event() encodes the header field by field, so the struct must
+// // have no padding for decoding it as a whole to work
+// static_assert(sizeof(LogEventHeader)
+//               == sizeof(CallSiteStaticData*) + sizeof(const char*)
+//                      + sizeof(uint64_t) + sizeof(size_t));
+
 class ThreadContext
 {
   public:
@@ -442,20 +448,18 @@ void push_log_event(const CallSiteStaticData* static_data, Args&&... args)
     }
     size_t header_plus_args_size = total_args_size + sizeof(LogEventHeader);
 
-    LogEventHeader header;
-    header.static_data = static_data;
-    header.thread_name = thread_name;
     // TODO: If the cpu doesn't have invariant tsc, we have to fall back to
     // chrono, so must figure out how to handle that
-    header.timestamp = read_tsc();
-    header.payload_size = total_args_size;
+    const uint64_t timestamp = read_tsc();
 
     std::byte* buffer = q->reserve_write(header_plus_args_size);
     if (buffer == nullptr)
         return; // Not enough queue space, drop the event
 
-    // Encode header
-    Codec<LogEventHeader>::encode(buffer, header);
+    Codec<const CallSiteStaticData*>::encode(buffer, static_data);
+    Codec<const char*>::encode(buffer, thread_name);
+    Codec<uint64_t>::encode(buffer, timestamp);
+    Codec<size_t>::encode(buffer, total_args_size);
     // Encode args
     ((Codec<std::remove_cvref_t<Args>>::encode(buffer, args)), ...);
 

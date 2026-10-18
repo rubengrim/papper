@@ -13,7 +13,7 @@ struct LatencyFrontendOptions : quill::FrontendOptions
 {
     static constexpr quill::QueueType queue_type
         = quill::QueueType::BoundedDropping;
-    static constexpr size_t initial_queue_capacity = 256 * 1024;
+    static constexpr size_t initial_queue_capacity = 512 * 1024;
 };
 
 // Frontend options are compile time, so the setup is templated on them
