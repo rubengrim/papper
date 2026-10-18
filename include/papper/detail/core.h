@@ -4,17 +4,11 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
-#include <iostream>
-#include <memory>
-
-#include <mutex>
 #include <source_location>
 #include <stdexcept>
 #include <string>
 #include <thread>
-#include <unordered_map>
 #include <utility>
-#include <vector>
 
 #include <fmt/format.h>
 
@@ -36,7 +30,7 @@ inline size_t queue_size = 1048576; // 1Mb
 }
 
 template <typename... Args>
-std::string decode_and_format(const char* fmt_str, const std::byte* args_data)
+std::string decode_and_format(const char* fmt_str, const std::byte*& args_data)
 {
     using ArgsTuple = std::tuple<Args...>;
     ArgsTuple args;
@@ -71,7 +65,7 @@ struct CallSiteStaticData
 {
     LogLevel level;
     const char* fmt_str = "";
-    std::string (*decoding_fn)(const char*, const std::byte*);
+    std::string (*decoding_fn)(const char*, const std::byte*&);
     std::source_location location;
 };
 
@@ -149,10 +143,14 @@ class Backend
     ~Backend()
     {
         _running.store(false, std::memory_order_release);
+
         if (_backend_thread.joinable())
         {
             _backend_thread.join();
         }
+
+        // Only free after the backend thread, which uses it, has stopped
+        delete[] _queue_copy;
     }
 
   public:
@@ -222,72 +220,83 @@ class Backend
         delete node;
     }
 
-    bool try_process_log_event(Queue& q)
+    void process_events(const std::byte* buffer, const size_t size)
     {
-        const std::byte* buffer = q.reserve_read(sizeof(LogEventHeader));
-        if (buffer == nullptr)
-            return false; // Nothing to read
+        size_t ptr = 0;
+        while (ptr < size)
+        {
+            LogEventHeader header;
+            Codec<LogEventHeader>::decode(buffer, header);
+            ptr += sizeof(LogEventHeader) + header.payload_size;
 
-        LogEventHeader header;
-        Codec<LogEventHeader>::decode(buffer, header);
-        q.commit_read();
+            std::string message = header.static_data->decoding_fn(
+                header.static_data->fmt_str, buffer);
 
-        if (header.static_data->level
-            < min_log_level.load(std::memory_order_acquire))
-            return true; // Drop the event if to low level
+            if (header.static_data->level
+                < min_log_level.load(std::memory_order_acquire))
+            {
+                continue; // Drop the event if too low level
+            }
 
-        buffer = q.reserve_read(header.payload_size);
-        std::string message = header.static_data->decoding_fn(
-            header.static_data->fmt_str, buffer);
-        q.commit_read();
+            PatternData pattern_data = {
+                .level = header.static_data->level,
+                .thread_name = header.thread_name,
+                .timestamp
+                = _clock.timestamp_to_local_system_time(header.timestamp),
+                .filename = header.static_data->location.file_name(),
+                .functionname = header.static_data->location.function_name(),
+                .linenumber = header.static_data->location.line(),
+                .message = message,
+            };
+            std::string formatted_message
+                = _pattern_formatter.format(pattern_data);
 
-        PatternData pattern_data = {
-            .level = header.static_data->level,
-            .thread_name = header.thread_name,
-            .timestamp
-            = _clock.timestamp_to_local_system_time(header.timestamp),
-            .filename = header.static_data->location.file_name(),
-            .functionname = header.static_data->location.function_name(),
-            .linenumber = header.static_data->location.line(),
-            .message = message,
-        };
-        std::string formatted_message
-            = _pattern_formatter.format(pattern_data);
-
-        _sink.write_str_and_endl(formatted_message);
-
-        return true;
+            _sink.write_str_and_endl(formatted_message);
+        }
     }
 
-    // Polls all thread queues once for new log events
-    // Returns number of events processed
-    int poll_threads_once()
+    // Checks all threads for events and returns true if there were any
+    bool poll_threads()
     {
-        int n_events_processed = 0;
+        bool b_were_events_to_process = false;
+
         ThreadContextNode* node = _head.load(std::memory_order_acquire);
         while (node != nullptr)
         {
             ThreadContextNode* next = node->next;
+            Queue& q = node->context->get_queue();
 
-            if (!try_process_log_event(node->context->get_queue()))
+            const size_t q_capacity = q.get_capacity();
+            if (q_capacity > _queue_copy_size)
             {
-                if (!node->context->thread_is_alive())
-                {
-                    // Delete and remove the node+context from the
-                    // list if the thread has been killed and there
-                    // are no events left in the queue to process
-                    remove_and_delete_node(node);
-                }
+                delete[] _queue_copy;
+                _queue_copy = new std::byte[q_capacity];
+                _queue_copy_size = q_capacity;
             }
-            else
+
+            size_t n_bytes_read = 0;
+            const std::byte* data = q.read_all_available(n_bytes_read);
+            if (data != nullptr)
             {
-                n_events_processed += 1;
+                // Make local copy of data, release the queue, and then process
+                // from the copy
+                std::memcpy(_queue_copy, data, n_bytes_read);
+                q.commit_read();
+                process_events(_queue_copy, n_bytes_read);
+                b_were_events_to_process = true;
+            }
+            else if (!node->context->thread_is_alive())
+            {
+                // Delete and remove the node+context from the
+                // list if the thread has been killed and there
+                // are no events left in the queue to process
+                remove_and_delete_node(node);
             }
 
             node = next;
         }
 
-        return n_events_processed;
+        return b_were_events_to_process;
     }
 
     Backend()
@@ -311,7 +320,7 @@ class Backend
             double last_utc_offset_resync = 0;
             double last_system_clock_resync = 0;
 
-            auto resync_clock = [&]() {
+            auto try_resync_clock = [&]() {
                 double now = _clock.read_timestamp_ns();
                 if (now - last_utc_offset_resync
                     > resync_utc_offset_interval_ns)
@@ -334,9 +343,9 @@ class Backend
                 _sink.poll_for_pending_sink_switch();
                 _pattern_formatter.poll_for_pending_formatter_switch();
 
-                resync_clock();
+                try_resync_clock();
 
-                if (poll_threads_once() > 0)
+                if (poll_threads())
                 {
                     // Reset backoff if there were events to process
                     backoff_us = 1;
@@ -355,13 +364,17 @@ class Backend
             // deleted
             while (_head.load(std::memory_order_acquire) != nullptr)
             {
-                resync_clock();
-                poll_threads_once();
+                try_resync_clock();
+                poll_threads();
             }
         });
     }
 
   private:
+    // Holds a local copy of the raw message data in a thread queue
+    std::byte* _queue_copy = new std::byte[1];
+    size_t _queue_copy_size = 1;
+
     std::atomic<bool> _running = false;
     std::atomic<ThreadContextNode*> _head = nullptr;
     SinkHandler _sink;
@@ -412,8 +425,7 @@ get_or_create_thread_queue(std::string_view thread_name = "",
 }
 
 template <typename... Args>
-[[gnu::noinline]] void push_log_event(const CallSiteStaticData* static_data,
-                                      Args&&... args)
+void push_log_event(const CallSiteStaticData* static_data, Args&&... args)
 {
     static thread_local constinit std::pair<const char*, Queue*> t{};
     if (t.second == nullptr) [[unlikely]]

@@ -3,7 +3,6 @@
 #include <atomic>
 #include <bit>
 #include <cstddef>
-#include <cstdio>
 #include <cstring>
 #include <new>
 
@@ -27,8 +26,7 @@ class Queue
     Queue(const size_t capacity)
         // Use the closest power of two larger or equal to capacity for more
         // efficient index wrapping
-        : _capacity{ std::bit_ceil(capacity) }, _wrap_mask{ _capacity - 1 },
-          _end{ _capacity }
+        : _capacity{ std::bit_ceil(capacity) }, _end{ _capacity }
     {
         _buffer = new std::byte[_capacity];
         memset(_buffer, 0, _capacity);
@@ -90,65 +88,66 @@ class Queue
         _w.store(_future_write_pos, std::memory_order_release);
     }
 
-    const std::byte* reserve_read(const size_t size)
+    const std::byte* read_all_available(size_t& n_read)
     {
         const size_t read = _r.load(std::memory_order_relaxed);
+        const size_t write = _w.load(std::memory_order_acquire);
 
-        auto try_reserve = [&](const size_t write) -> const std::byte* {
-            if (write > read)
+        if (write > read)
+        {
+            n_read = write - read;
+            _future_read_pos = read + n_read;
+            return &_buffer[read];
+        }
+        else if (write == read)
+        {
+            n_read = 0;
+            return nullptr;
+        }
+        else // read > write
+        {
+            const size_t end = _end.load(std::memory_order_relaxed);
+            if (read < end)
             {
-                if (read + size <= write)
-                {
-                    _future_read_pos = read + size;
-                    return &_buffer[read];
-                }
-                else
-                {
-                    return nullptr;
-                }
+                // There are bytes to read before the end marker
+                n_read = end - read;
+                _future_read_pos = 0;
+                _reset_end_on_commit = true;
+                return &_buffer[read];
             }
-            else if (read == write)
+            else if (write > 0) // Wrap to beginning and check there
             {
+                // There are bytes to read from the beginning of the buffer
+                n_read = write;
+                _future_read_pos = write;
+                _reset_end_on_commit = true;
+                return &_buffer[0];
+            }
+            else
+            {
+                n_read = 0;
                 return nullptr;
             }
-            else // read > write
-            {
-                const size_t end = _end.load(std::memory_order_relaxed);
-                if (read + size <= end)
-                {
-                    _future_read_pos = (read + size) & _wrap_mask;
-                    return &_buffer[read];
-                }
-                else if (size <= write)
-                {
-                    _end.store(_capacity, std::memory_order_relaxed);
-                    _future_read_pos = size;
-                    return &_buffer[0];
-                }
-                else
-                {
-                    return nullptr;
-                }
-            }
-        };
-
-        const std::byte* buffer = try_reserve(_cached_w);
-        if (buffer != nullptr)
-            return buffer;
-
-        // Reload _w and try again
-        _cached_w = _w.load(std::memory_order_acquire);
-        return try_reserve(_cached_w);
+        }
     }
 
     void commit_read()
     {
+        if (_reset_end_on_commit)
+        {
+            _end.store(_capacity, std::memory_order_relaxed);
+            _reset_end_on_commit = false;
+        }
         _r.store(_future_read_pos, std::memory_order_release);
+    }
+
+    size_t get_capacity()
+    {
+        return _capacity;
     }
 
   private:
     const size_t _capacity;
-    const size_t _wrap_mask;
 
     std::byte* _buffer;
     alignas(_cache_line_len) std::atomic<size_t> _r = 0;
@@ -159,17 +158,12 @@ class Queue
     // after the write is commited
     size_t _future_write_pos = 0;
 
-    alignas(_cache_line_len) size_t _cached_w = 0;
     // When memory is reserved, this index is set to where _r should be
     // after the read is commited
-    size_t _future_read_pos = 0;
+    alignas(_cache_line_len) size_t _future_read_pos = 0;
+    bool _reset_end_on_commit = false;
 
-    // Set by the writer when it wraps so the reader knows not to read after
-    // this point.
-    // Fixes issue with the reader thinking the LogEventHeader lies at the
-    // buffer tail just because it fits there, when in reality the writer
-    // wrapped and wrote at the buffer beginning (because it writes header +
-    // payload in one call, while reader reads header first and then payload)
+    // Set by the writer when it wraps so the reader knows to wrap there too
     alignas(_cache_line_len) std::atomic<size_t> _end;
 };
 

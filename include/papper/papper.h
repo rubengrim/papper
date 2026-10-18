@@ -2,8 +2,6 @@
 
 // IWYU pragma: always_keep
 
-#include <source_location>
-
 #include "detail/core.h"
 
 namespace papper
