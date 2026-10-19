@@ -272,13 +272,13 @@ class Backend
             ThreadContextNode* next = node->next;
             Queue& q = node->context->get_queue();
 
-            const size_t q_capacity = q.get_capacity();
-            if (q_capacity > _queue_copy_size)
-            {
-                delete[] _queue_copy;
-                _queue_copy = new std::byte[q_capacity];
-                _queue_copy_size = q_capacity;
-            }
+            // const size_t q_capacity = q.get_capacity();
+            // if (q_capacity > _queue_copy_size)
+            // {
+            //     delete[] _queue_copy;
+            //     _queue_copy = new std::byte[q_capacity];
+            //     _queue_copy_size = q_capacity;
+            // }
 
             size_t n_bytes_read = 0;
             const std::byte* data = q.read_all_available(n_bytes_read);
@@ -286,9 +286,9 @@ class Backend
             {
                 // Make local copy of data, release the queue, and then process
                 // from the copy
-                std::memcpy(_queue_copy, data, n_bytes_read);
+                // std::memcpy(_queue_copy, data, n_bytes_read);
+                process_events(data, n_bytes_read);
                 q.commit_read();
-                process_events(_queue_copy, n_bytes_read);
                 b_were_events_to_process = true;
             }
             else if (!node->context->thread_is_alive())
