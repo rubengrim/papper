@@ -16,7 +16,7 @@ class Queue
 #pragma GCC diagnostic ignored "-Winterference-size"
 #endif
     // static constexpr size_t _cache_line_len = 128;
-    static constexpr size_t _cache_line_len
+    static constexpr size_t _alignment
         = std::hardware_destructive_interference_size;
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC diagnostic pop
@@ -26,10 +26,14 @@ class Queue
     Queue(const size_t capacity)
         // Use the closest power of two larger or equal to capacity for more
         // efficient index wrapping
-        : _capacity{ std::bit_ceil(capacity) }, _end{ _capacity }
+        // TODO: Validate capacity somehow
+        : _capacity{ std::bit_ceil(capacity) }, _wrap_mask{ _capacity - 1 }
+
     {
-        _buffer = new std::byte[_capacity];
-        memset(_buffer, 0, _capacity);
+        // Allocate twice the capacity for more efficient end of buffer wrap
+        // logic
+        _buffer = new std::byte[2 * _capacity];
+        memset(_buffer, 0, 2 * _capacity);
     }
 
     ~Queue()
@@ -37,134 +41,92 @@ class Queue
         delete[] _buffer;
     }
 
-    std::byte* reserve_write(const size_t size)
+    struct WriteReservation
     {
-        const size_t write = _w.load(std::memory_order_relaxed);
+        std::byte* buffer;
+        const size_t new_write_pos;
+    };
 
-        auto try_reserve = [&](const size_t read) -> std::byte* {
-            if (write >= read)
-            {
-                if (write + size <= _capacity)
-                {
-                    _future_write_pos = write + size;
-                    return &_buffer[write];
-                }
-                else if (size < read)
-                {
-                    _end.store(write, std::memory_order_relaxed);
-                    _future_write_pos = size;
-                    return _buffer;
-                }
-                else
-                {
-                    return nullptr;
-                }
-            }
-            else // read > write
-            {
-                if (write + size <= read - 1)
-                {
-                    _future_write_pos = write + size;
-                    return _buffer + write;
-                }
-                else
-                {
-                    return nullptr;
-                }
-            }
-        };
-
-        std::byte* buffer = try_reserve(_cached_r);
-        if (buffer != nullptr)
-            return buffer;
-
-        // Reload _r and try again
-        _cached_r = _r.load(std::memory_order_acquire);
-        return try_reserve(_cached_r);
-    }
-
-    void commit_write()
+    WriteReservation reserve_write(const size_t size) noexcept
     {
-        _w.store(_future_write_pos, std::memory_order_release);
-    }
+        if (_cached_r + _capacity - _w < size)
+        {
+            // Not enough space, reload cached r and try again
+            _cached_r = _atomic_r.load(std::memory_order_acquire);
 
-    const std::byte* read_all_available(size_t& n_read)
-    {
-        const size_t read = _r.load(std::memory_order_relaxed);
-        const size_t write = _w.load(std::memory_order_acquire);
-
-        if (write > read)
-        {
-            n_read = write - read;
-            _future_read_pos = read + n_read;
-            return &_buffer[read];
-        }
-        else if (write == read)
-        {
-            n_read = 0;
-            return nullptr;
-        }
-        else // read > write
-        {
-            const size_t end = _end.load(std::memory_order_relaxed);
-            if (read < end)
+            if (_cached_r + _capacity - _w < size)
             {
-                // There are bytes to read before the end marker
-                n_read = end - read;
-                _future_read_pos = 0;
-                _reset_end_on_commit = true;
-                return &_buffer[read];
-            }
-            else if (write > 0) // Wrap to beginning and check there
-            {
-                // There are bytes to read from the beginning of the buffer
-                n_read = write;
-                _future_read_pos = write;
-                _reset_end_on_commit = true;
-                return &_buffer[0];
-            }
-            else
-            {
-                n_read = 0;
-                return nullptr;
+                return WriteReservation{ nullptr, 0 };
             }
         }
+
+        return WriteReservation{ &_buffer[_w & _wrap_mask], _w + size };
     }
 
-    void commit_read()
+    void commit_write(const size_t new_write_pos) noexcept
     {
-        if (_reset_end_on_commit)
+        _w = new_write_pos;
+        _atomic_w.store(_w, std::memory_order_release);
+    }
+
+    struct ReadReservation
+    {
+        const std::byte* buffer;
+        const size_t current_read_pos;
+    };
+
+    // Returns an address from where it is safe to read at most one log event
+    const ReadReservation reserve_read() noexcept
+    {
+        // If not empty, we assume there is at least one full log event
+        // to read
+        if (is_empty())
         {
-            _end.store(_capacity, std::memory_order_relaxed);
-            _reset_end_on_commit = false;
+            return ReadReservation{ nullptr, 0 };
         }
-        _r.store(_future_read_pos, std::memory_order_release);
+
+        return ReadReservation{ &_buffer[_r & _wrap_mask], _r };
     }
 
-    size_t get_capacity()
+    // When committing a read, call with ReadReservation::current_read_pos
+    // plus the actual size that was read
+    void commit_read(const size_t new_read_pos) noexcept
     {
-        return _capacity;
+        _r = new_read_pos;
+        _atomic_r.store(_r, std::memory_order_release);
+    }
+
+    bool is_empty()
+    {
+        if (_cached_w <= _r)
+        {
+            // Reload cached w to really make sure it's empty
+            _cached_w = _atomic_w.load(std::memory_order_acquire);
+            return _cached_w == _r;
+        }
+        else
+        {
+            return false;
+        }
     }
 
   private:
     const size_t _capacity;
+    const size_t _wrap_mask;
 
     std::byte* _buffer;
-    alignas(_cache_line_len) std::atomic<size_t> _r = 0;
-    alignas(_cache_line_len) std::atomic<size_t> _w = 0;
 
-    alignas(_cache_line_len) size_t _cached_r = 0;
-    // When memory is reserved, this index is set to where _w should be
-    // after the write is commited
-    size_t _future_write_pos = 0;
+    // Shared
+    alignas(_alignment) std::atomic<size_t> _atomic_r = 0;
+    alignas(_alignment) std::atomic<size_t> _atomic_w = 0;
 
-    // When memory is reserved, this index is set to where _r should be
-    // after the read is commited
-    alignas(_cache_line_len) size_t _future_read_pos = 0;
-    bool _reset_end_on_commit = false;
+    // Producer local
+    alignas(_alignment) size_t _w = 0;
+    size_t _cached_r = 0;
 
-    // Set by the writer when it wraps so the reader knows to wrap there too
-    alignas(_cache_line_len) std::atomic<size_t> _end;
+    // Consumer local
+    alignas(_alignment) size_t _r = 0;
+    size_t _cached_w = 0;
 };
 
 }

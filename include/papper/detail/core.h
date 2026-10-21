@@ -226,42 +226,45 @@ class Backend
         delete node;
     }
 
-    void process_events(const std::byte* buffer, const size_t size)
+    // Reads and processes one single event from the buffer.
+    // Returns the number of bytes that were read
+    size_t read_and_process_single_event(const std::byte* buffer)
     {
-        size_t ptr = 0;
-        while (ptr < size)
+        LogEventHeader header;
+        Codec<LogEventHeader>::decode(buffer, header);
+
+        const size_t total_event_size
+            = sizeof(LogEventHeader) + header.payload_size;
+
+        std::string message = header.static_data->decoding_fn(
+            header.static_data->fmt_str, buffer);
+
+        if (header.static_data->level
+            < min_log_level.load(std::memory_order_acquire))
         {
-            LogEventHeader header;
-            Codec<LogEventHeader>::decode(buffer, header);
-            ptr += sizeof(LogEventHeader) + header.payload_size;
-
-            std::string message = header.static_data->decoding_fn(
-                header.static_data->fmt_str, buffer);
-
-            if (header.static_data->level
-                < min_log_level.load(std::memory_order_acquire))
-            {
-                continue; // Drop the event if too low level
-            }
-
-            PatternData pattern_data = {
-                .level = header.static_data->level,
-                .thread_name = header.thread_name,
-                .timestamp
-                = _clock.timestamp_to_local_system_time(header.timestamp),
-                .filename = header.static_data->location.file_name(),
-                .functionname = header.static_data->location.function_name(),
-                .linenumber = header.static_data->location.line(),
-                .message = message,
-            };
-            std::string formatted_message
-                = _pattern_formatter.format(pattern_data);
-
-            _sink.write_str_and_endl(formatted_message);
+            return total_event_size; // Drop the event if too low level
         }
+
+        PatternData pattern_data = {
+            .level = header.static_data->level,
+            .thread_name = header.thread_name,
+            .timestamp
+            = _clock.timestamp_to_local_system_time(header.timestamp),
+            .filename = header.static_data->location.file_name(),
+            .functionname = header.static_data->location.function_name(),
+            .linenumber = header.static_data->location.line(),
+            .message = message,
+        };
+        std::string formatted_message
+            = _pattern_formatter.format(pattern_data);
+
+        _sink.write_str_and_endl(formatted_message);
+
+        return total_event_size;
     }
 
-    // Checks all threads for events and returns true if there were any
+    // Poll all threads for events, processes them, and returns true if there
+    // were any
     bool poll_threads()
     {
         bool b_were_events_to_process = false;
@@ -272,23 +275,12 @@ class Backend
             ThreadContextNode* next = node->next;
             Queue& q = node->context->get_queue();
 
-            // const size_t q_capacity = q.get_capacity();
-            // if (q_capacity > _queue_copy_size)
-            // {
-            //     delete[] _queue_copy;
-            //     _queue_copy = new std::byte[q_capacity];
-            //     _queue_copy_size = q_capacity;
-            // }
-
-            size_t n_bytes_read = 0;
-            const std::byte* data = q.read_all_available(n_bytes_read);
-            if (data != nullptr)
+            Queue::ReadReservation read = q.reserve_read();
+            if (read.buffer != nullptr)
             {
-                // Make local copy of data, release the queue, and then process
-                // from the copy
-                // std::memcpy(_queue_copy, data, n_bytes_read);
-                process_events(data, n_bytes_read);
-                q.commit_read();
+                const size_t size_read
+                    = read_and_process_single_event(read.buffer);
+                q.commit_read(read.current_read_pos + size_read);
                 b_were_events_to_process = true;
             }
             else if (!node->context->thread_is_alive())
@@ -379,7 +371,6 @@ class Backend
   private:
     // Holds a local copy of the raw message data in a thread queue
     std::byte* _queue_copy = new std::byte[1];
-    size_t _queue_copy_size = 1;
 
     std::atomic<bool> _running = false;
     std::atomic<ThreadContextNode*> _head = nullptr;
@@ -452,7 +443,8 @@ void push_log_event(const CallSiteStaticData* static_data, Args&&... args)
     // chrono, so must figure out how to handle that
     const uint64_t timestamp = read_tsc();
 
-    std::byte* buffer = q->reserve_write(header_plus_args_size);
+    Queue::WriteReservation write = q->reserve_write(header_plus_args_size);
+    std::byte* buffer = write.buffer;
     if (buffer == nullptr)
         return; // Not enough queue space, drop the event
 
@@ -463,7 +455,7 @@ void push_log_event(const CallSiteStaticData* static_data, Args&&... args)
     // Encode args
     ((Codec<std::remove_cvref_t<Args>>::encode(buffer, args)), ...);
 
-    q->commit_write();
+    q->commit_write(write.new_write_pos);
 }
 
 } // end namespace papper::detail

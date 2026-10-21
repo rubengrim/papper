@@ -58,33 +58,40 @@ void finish()
 
 int main()
 {
-    std::atexit(finish);
-    perf_open();
+    // std::atexit(finish);
+    // perf_open();
+
+    // PAPPER_SET_PATTERN("{time:HMSF} {message}");
+
+    // if (papper::set_sink(
+    //         "test.log", true, papper::FlushOn::BufferFull, 64 * 1024)
+    //     != 0)
+    //     std::cout << "Fail" << std::endl;
+
+    // papper::set_default_queue_size((n_messages + n_warmup) * 128);
+    // papper::init_thread();
+
+    // c.init();
+
+    // // Warmup
+    // for (size_t i = 0; i < n_warmup; i++)
+    // {
+    //     TRACE("message {}", i);
+    // }
+
+    // std::string s = "hej";
+    // perf_command("enable\n", 7);
+    // begin = c.read_timestamp_ns();
+    // for (size_t i = 0; i < n_messages; i++)
+    // {
+    //     PAPPER_INFO("Logging int: {}, double: {:.3f}, string: {}", i, 0.4,
+    //     s);
+    // }
+    // perf_command("disable\n", 8);
 
     PAPPER_SET_PATTERN("{time:HMSF} {message}");
-
-    if (papper::set_sink(
-            "test.log", true, papper::FlushOn::BufferFull, 64 * 1024)
-        != 0)
-        std::cout << "Fail" << std::endl;
-
-    papper::set_default_queue_size((n_messages + n_warmup) * 128);
-    papper::init_thread();
-
-    c.init();
-
-    // Warmup
-    for (size_t i = 0; i < n_warmup; i++)
+    for (int i = 0; i < 10; i++)
     {
-        TRACE("message {}", i);
+        PAPPER_TRACE("hej {}, {}", i, "hopp");
     }
-
-    std::string s = "hej";
-    perf_command("enable\n", 7);
-    begin = c.read_timestamp_ns();
-    for (size_t i = 0; i < n_messages; i++)
-    {
-        PAPPER_INFO("Logging int: {}, double: {:.3f}, string: {}", i, 0.4, s);
-    }
-    perf_command("disable\n", 8);
 }
