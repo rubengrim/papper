@@ -11,16 +11,7 @@ namespace papper::detail
 
 class Queue
 {
-#if defined(__GNUC__) && !defined(__clang__)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Winterference-size"
-#endif
-    // static constexpr size_t _cache_line_len = 128;
-    static constexpr size_t _alignment
-        = std::hardware_destructive_interference_size;
-#if defined(__GNUC__) && !defined(__clang__)
-#pragma GCC diagnostic pop
-#endif
+    static constexpr size_t _alignment = 128;
 
   public:
     Queue(const size_t capacity)
@@ -32,13 +23,16 @@ class Queue
     {
         // Allocate twice the capacity for more efficient end of buffer wrap
         // logic
-        _buffer = new std::byte[2 * _capacity];
+        // TODO: This could throw, handle somehow?
+        _buffer = static_cast<std::byte*>(
+            ::operator new(2 * _capacity, std::align_val_t{ _alignment }));
         memset(_buffer, 0, 2 * _capacity);
     }
 
     ~Queue()
     {
-        delete[] _buffer;
+        // delete[] _buffer;
+        operator delete(_buffer, std::align_val_t{ _alignment });
     }
 
     struct WriteReservation

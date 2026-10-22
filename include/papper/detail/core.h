@@ -310,7 +310,7 @@ class Backend
         _backend_thread = std::thread([this]() {
             uint32_t backoff_us = 1;
             // TODO: Let user to change this
-            const uint32_t max_backoff_us = 100;
+            const uint32_t max_backoff_us = 200;
 
             const double resync_utc_offset_interval_ns = 1e6 * 1000.0;
             const double resync_to_system_clock_interval_ns = 1e6 * 100.0;
