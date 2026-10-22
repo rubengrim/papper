@@ -4,4 +4,5 @@ build/
 
 *.perf
 *.data
+*.data.old
 *.log
