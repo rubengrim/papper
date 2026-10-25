@@ -1,3 +1,4 @@
+#include "papper/detail/color.h"
 #include "papper/detail/core.h"
 #include "papper/detail/level.h"
 #include "papper/detail/time.h"
@@ -89,9 +90,11 @@ int main()
     // }
     // perf_command("disable\n", 8);
 
-    PAPPER_SET_PATTERN("{time:HMSF} {message}");
-    for (int i = 0; i < 10; i++)
-    {
-        PAPPER_TRACE("hej {}, {}", i, "hopp");
-    }
+    PAPPER_SET_PATTERN("{color:level}[{time:HMSf}] [{file:nameonly}:{line}] "
+                       "{level}  {message}{color:reset}")
+    PAPPER_TRACE("hej {}, {}", 10, "hopp");
+    PAPPER_INFO("hej {}, {}", 10, "hopp");
+    PAPPER_DEBUG("hej {}, {}", 10, "hopp");
+    PAPPER_WARN("hej {}, {}", 10, "hopp");
+    PAPPER_ERROR("hej {}, {}", 10, "hopp");
 }

@@ -5,6 +5,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
+#include <iostream>
 #include <iterator>
 #include <string>
 #include <string_view>
@@ -14,6 +15,7 @@
 #include <fmt/chrono.h>
 #include <fmt/format.h>
 
+#include "color.h"
 #include "level.h"
 
 namespace papper::detail
@@ -46,7 +48,7 @@ struct PatternData
     std::string_view message;
 };
 
-enum class PatternField
+enum class PatternFieldType
 {
     Level,
     ThreadName,
@@ -55,88 +57,148 @@ enum class PatternField
     Function,
     Line,
     Message,
+    Color,
 };
 
-constexpr bool name_to_field_enum(std::string_view name, PatternField& field)
-{
-    constexpr std::pair<std::string_view, PatternField> table[]
-        = { { "time", PatternField::Time },
-            { "file", PatternField::File },
-            { "function", PatternField::Function },
-            { "line", PatternField::Line },
-            { "level", PatternField::Level },
-            { "message", PatternField::Message },
-            { "m", PatternField::Message },
-            { "thread", PatternField::ThreadName } };
-
-    for (const auto& e : table)
-    {
-        if (e.first == name)
-        {
-            field = e.second;
-            return true;
-        }
-    }
-
-    return false;
-}
-
-enum class PatternFieldFormatSpec
+enum class PatternFieldSpec
 {
     None,
+    TimeRaw,      // Raw nanosecond timestamp
     TimeHMS,      // 16:08:09
     TimeHMSf,     // 16:08:09.796341
     TimeHMSF,     // 16:08:09.796341126
-    FileNameOnly, // file.txt instead of /home/user/file.txt
+    FileFullPath, // /home/user/file.txt
+    FileNameOnly, // file.txt
+    ColorLevel,   // Will use configured log level color
+    ColorReset,   // Marks end of color range
+    ColorBlue,
 };
 
-constexpr bool name_to_format_spec_enum(std::string_view name,
-                                        PatternFieldFormatSpec& spec)
+struct PatternField
 {
-    constexpr std::pair<std::string_view, PatternFieldFormatSpec> table[] = {
-        { "", PatternFieldFormatSpec::None },
-        { "HMS", PatternFieldFormatSpec::TimeHMS },
-        { "HMSf", PatternFieldFormatSpec::TimeHMSf },
-        { "HMSF", PatternFieldFormatSpec::TimeHMSF },
-        { "path", PatternFieldFormatSpec::None },
-        { "nameonly", PatternFieldFormatSpec::FileNameOnly },
-    };
+    PatternFieldType type;
+    PatternFieldSpec spec;
+};
 
-    for (const auto& e : table)
+// Given a type name and spec name, get the corresponding PatternField variant.
+// Returns 0 on success, 1 if the field name is invalid, and 2 if the spec is
+// invalid or can't be used for the specific field.
+consteval int get_and_validate_field(const std::string_view field_name,
+                                     const std::string_view spec,
+                                     PatternField& field)
+{
+    if (field_name == "level")
     {
-        if (e.first == name)
+        field.type = PatternFieldType::Level;
+        if (spec == "")
         {
-            spec = e.second;
-            return true;
+            field.spec = PatternFieldSpec::None;
+            return 0;
         }
+        return 2;
     }
-
-    return false;
-}
-
-consteval bool validate_field_spec_combination(PatternField field,
-                                               PatternFieldFormatSpec spec)
-{
-    if (field == PatternField::Time)
+    else if (field_name == "thread")
     {
-        if (spec == PatternFieldFormatSpec::TimeHMS)
-            return true;
-        if (spec == PatternFieldFormatSpec::TimeHMSf)
-            return true;
-        if (spec == PatternFieldFormatSpec::TimeHMSF)
-            return true;
+        field.type = PatternFieldType::ThreadName;
+        if (spec == "")
+        {
+            field.spec = PatternFieldSpec::None;
+            return 0;
+        }
+        return 2;
     }
-    else if (field == PatternField::File)
+    else if (field_name == "time")
     {
-        if (spec == PatternFieldFormatSpec::FileNameOnly)
-            return true;
+        field.type = PatternFieldType::Time;
+        if (spec == "")
+        {
+            field.spec = PatternFieldSpec::TimeRaw;
+            return 0;
+        }
+        else if (spec == "HMS")
+        {
+            field.spec = PatternFieldSpec::TimeHMS;
+            return 0;
+        }
+        else if (spec == "HMSf")
+        {
+            field.spec = PatternFieldSpec::TimeHMSf;
+            return 0;
+        }
+        else if (spec == "HMSF")
+        {
+            field.spec = PatternFieldSpec::TimeHMSF;
+            return 0;
+        }
+        return 2;
+    }
+    else if (field_name == "file")
+    {
+        field.type = PatternFieldType::File;
+        if (spec == "")
+        {
+            field.spec = PatternFieldSpec::FileFullPath;
+            return 0;
+        }
+        else if (spec == "nameonly")
+        {
+            field.spec = PatternFieldSpec::FileNameOnly;
+            return 0;
+        }
+        return 2;
+    }
+    else if (field_name == "function")
+    {
+        field.type = PatternFieldType::Function;
+        if (spec == "")
+        {
+            field.spec = PatternFieldSpec::None;
+            return 0;
+        }
+        return 2;
+    }
+    else if (field_name == "line")
+    {
+        field.type = PatternFieldType::Line;
+        if (spec == "")
+        {
+            field.spec = PatternFieldSpec::None;
+            return 0;
+        }
+        return 2;
+    }
+    else if (field_name == "message")
+    {
+        field.type = PatternFieldType::Message;
+        if (spec == "")
+        {
+            field.spec = PatternFieldSpec::None;
+            return 0;
+        }
+        return 2;
+    }
+    else if (field_name == "color")
+    {
+        field.type = PatternFieldType::Color;
+        if (spec == "level")
+        {
+            field.spec = PatternFieldSpec::ColorLevel;
+            return 0;
+        }
+        else if (spec == "reset")
+        {
+            field.spec = PatternFieldSpec::ColorReset;
+            return 0;
+        }
+        else if (spec == "blue")
+        {
+            field.spec = PatternFieldSpec::ColorBlue;
+            return 0;
+        }
+        return 2;
     }
 
-    // If not one of the above, only None is valid spec
-    if (spec == PatternFieldFormatSpec::None)
-        return true;
-
-    return false;
+    return 1;
 }
 
 enum class ParsingError
@@ -144,9 +206,8 @@ enum class ParsingError
     None,
     UnterminatedBrace,
     EmptyFieldName,
-    UnknownFieldName,
-    UnknownFormatSpec,
-    InvalidSpecUsage,
+    UnknownFieldType,
+    InvalidFieldSpec,
     TooManyFields,
     UnmatchedClosingBrace,
 };
@@ -165,36 +226,29 @@ struct ParsedPattern
     size_t fmt_str_len = 0;
 
     PatternField fields[MaxFields];
-    PatternFieldFormatSpec specs[MaxFields];
     size_t field_count = 0;
 };
 
-// Given the spec enum, push the corresponding format string into result
+// Expand the field into it's representation in the result fmt str.
+// For instance, {time:HMSf} in the pattern needs to be
+// expanded into the actual format string: {}.{:06}
 template <typename ParsedPatternT>
-consteval void expand_spec_into_result(PatternFieldFormatSpec spec,
-                                       ParsedPatternT& result)
+consteval void expand_field(PatternField field, ParsedPatternT& result)
 {
-    std::string_view expansion = "";
+    // All fields and specs other than the ones handled below can be expanded
+    // into basic brackets
+    std::string_view expansion = "{}";
 
-    switch (spec)
+    if (field.spec == PatternFieldSpec::TimeHMSf)
     {
-    case (PatternFieldFormatSpec::None):
-        expansion = "{}";
-        break;
-    case (PatternFieldFormatSpec::TimeHMS):
-        expansion = "{}";
-        break;
-    case (PatternFieldFormatSpec::TimeHMSf):
         expansion = "{}.{:06}";
-        break;
-    case (PatternFieldFormatSpec::TimeHMSF):
+    }
+    else if (field.spec == PatternFieldSpec::TimeHMSF)
+    {
         expansion = "{}.{:09}";
-        break;
-    case (PatternFieldFormatSpec::FileNameOnly):
-        expansion = "{}";
-        break;
     }
 
+    // Push to fmt str
     for (auto c : expansion)
     {
         result.fmt_str[result.fmt_str_len++] = c;
@@ -261,22 +315,15 @@ consteval auto parse_pattern()
             }
 
             PatternField field;
-            if (!name_to_field_enum(field_name, field))
+            int res = get_and_validate_field(field_name, spec_name, field);
+            if (res == 1)
             {
-                result.error = ParsingError::UnknownFieldName;
+                result.error = ParsingError::UnknownFieldType;
                 return result;
             }
-
-            PatternFieldFormatSpec spec;
-            if (!name_to_format_spec_enum(spec_name, spec))
+            else if (res == 2)
             {
-                result.error = ParsingError::UnknownFormatSpec;
-                return result;
-            }
-
-            if (!validate_field_spec_combination(field, spec))
-            {
-                result.error = ParsingError::InvalidSpecUsage;
+                result.error = ParsingError::InvalidFieldSpec;
                 return result;
             }
 
@@ -286,11 +333,10 @@ consteval auto parse_pattern()
                 return result;
             }
 
-            result.specs[result.field_count] = spec;
             result.fields[result.field_count] = field;
             result.field_count++;
 
-            expand_spec_into_result(spec, result);
+            expand_field(field, result);
 
             i = bracket_close_idx + 1;
             continue;
@@ -318,7 +364,7 @@ consteval auto parse_pattern()
 }
 
 // TODO: Remove this function and just write a custom formatter for
-// papper::Level
+// papper::LogLevel
 constexpr std::string_view level_to_name(LogLevel level)
 {
     switch (level)
@@ -328,41 +374,68 @@ constexpr std::string_view level_to_name(LogLevel level)
     case LogLevel::Debug:
         return "DEBUG";
     case LogLevel::Info:
-        return "INFO";
+        return "INFO ";
     case LogLevel::Warn:
-        return "WARN";
+        return "WARN ";
     case LogLevel::Error:
         return "ERROR";
     }
     return "UNKNOWN";
 }
 
+template <PatternFieldSpec Spec>
+std::string_view get_color(const LogLevel level,
+                           const ColorConfiguration* colors)
+{
+    // nullptr means the sink does not want colored output, so expand field to
+    // nothing
+    if (colors == nullptr)
+    {
+        return "";
+    }
+
+    if constexpr (Spec == PatternFieldSpec::ColorLevel)
+        return colors->level_color(level);
+    else if constexpr (Spec == PatternFieldSpec::ColorReset)
+        return Color::reset;
+    else if constexpr (Spec == PatternFieldSpec::ColorBlue)
+        return Color::blue;
+    else
+        static_assert(false,
+                      "spec is not a color"); // Should be unreachable
+}
+
 // Note to me in the future: decltype(auto) combined with return ()
 // adds a reference to the returned type, so pattern fields aren't
-// actually copied
+// copied
 template <PatternField Field>
-constexpr decltype(auto) get_field(const PatternData& data)
+constexpr decltype(auto) get_field(const PatternData& data,
+                                   const ColorConfiguration* colors)
 {
-    if constexpr (Field == PatternField::Level)
+    constexpr PatternFieldType FieldType = Field.type;
+
+    if constexpr (FieldType == PatternFieldType::Color)
+        return get_color<Field.spec>(data.level, colors);
+    else if constexpr (FieldType == PatternFieldType::Level)
         return (level_to_name(data.level));
-    else if constexpr (Field == PatternField::Time)
+    else if constexpr (FieldType == PatternFieldType::Time)
         return (data.timestamp);
-    else if constexpr (Field == PatternField::File)
+    else if constexpr (FieldType == PatternFieldType::File)
         return (data.filename);
-    else if constexpr (Field == PatternField::Function)
+    else if constexpr (FieldType == PatternFieldType::Function)
         return (data.functionname);
-    else if constexpr (Field == PatternField::Line)
+    else if constexpr (FieldType == PatternFieldType::Line)
         return (data.linenumber);
-    else if constexpr (Field == PatternField::Message)
+    else if constexpr (FieldType == PatternFieldType::Message)
         return (data.message);
-    else if constexpr (Field == PatternField::ThreadName)
+    else if constexpr (FieldType == PatternFieldType::ThreadName)
         return (data.thread_name);
     else
         static_assert(false,
                       "field is invalid"); // Should be unreachable
 }
 
-template <PatternFieldFormatSpec Spec>
+template <PatternFieldSpec Spec>
 inline auto
 process_time_arg(const std::chrono::sys_time<std::chrono::nanoseconds>& arg)
 {
@@ -381,11 +454,11 @@ process_time_arg(const std::chrono::sys_time<std::chrono::nanoseconds>& arg)
         last_update = arg_s;
     }
 
-    if constexpr (Spec == PatternFieldFormatSpec::TimeHMS)
+    if constexpr (Spec == PatternFieldSpec::TimeHMS)
     {
         return std::make_tuple(HMS_part);
     }
-    else if constexpr (Spec == PatternFieldFormatSpec::TimeHMSf)
+    else if constexpr (Spec == PatternFieldSpec::TimeHMSf)
     {
         uint64_t us_part
             = std::chrono::floor<std::chrono::microseconds>(
@@ -393,7 +466,7 @@ process_time_arg(const std::chrono::sys_time<std::chrono::nanoseconds>& arg)
                   .count();
         return std::make_tuple(HMS_part, us_part);
     }
-    else if constexpr (Spec == PatternFieldFormatSpec::TimeHMSF)
+    else if constexpr (Spec == PatternFieldSpec::TimeHMSF)
     {
         uint64_t ns_part
             = (arg.time_since_epoch() % std::chrono::seconds(1)).count();
@@ -402,85 +475,86 @@ process_time_arg(const std::chrono::sys_time<std::chrono::nanoseconds>& arg)
 }
 
 // For some specs the arg has to be expanded into multiple args or
-// converted somehow Returns a tuple with the expanded args
-template <PatternFieldFormatSpec Spec, typename T>
+// processed somehow.
+// Returns a tuple with the expanded args
+template <PatternFieldSpec Spec, typename T>
 auto expand_and_process_format_arg(const T& arg)
 {
-    if constexpr (Spec == PatternFieldFormatSpec::None)
-    {
-        return std::make_tuple(arg);
-    }
-    else if constexpr (Spec == PatternFieldFormatSpec::TimeHMS)
+    if constexpr (Spec == PatternFieldSpec::TimeHMS)
     {
         return process_time_arg<Spec>(arg);
     }
-    else if constexpr (Spec == PatternFieldFormatSpec::TimeHMSf)
+    else if constexpr (Spec == PatternFieldSpec::TimeHMSf)
     {
         return process_time_arg<Spec>(arg);
     }
-    else if constexpr (Spec == PatternFieldFormatSpec::TimeHMSF)
+    else if constexpr (Spec == PatternFieldSpec::TimeHMSF)
     {
         return process_time_arg<Spec>(arg);
     }
-    else if constexpr (Spec == PatternFieldFormatSpec::FileNameOnly)
+    else if constexpr (Spec == PatternFieldSpec::FileNameOnly)
     {
         std::string_view path_sv = arg;
         std::string_view filename
             = path_sv.substr(path_sv.find_last_of("/\\") + 1);
         return std::make_tuple(filename);
     }
+    else
+    {
+        return std::make_tuple(arg);
+    }
 }
 
-// Base class used for type erasure in PatternFormatterHandler
 class PatternFormatterBase
 {
   public:
     virtual ~PatternFormatterBase() = default;
-    virtual std::string format(const PatternData& data) = 0;
+    virtual std::string format(const PatternData& data,
+                               const ColorConfiguration* colors) = 0;
 };
 
 template <StaticString Pattern, size_t MaxFields = 16,
-          size_t MaxFmtStrLen = 1000> // 16 and 1000 should be enough
-                                      // in basically all cases
+          size_t MaxFmtStrLen = 1000>
 class PatternFormatter : public PatternFormatterBase
 {
   public:
-    std::string format(const PatternData& data) override
+    std::string format(const PatternData& data,
+                       const ColorConfiguration* colors) override
     {
         return format_impl(
-            data, std::make_index_sequence<_parsed_pattern.field_count>{});
+            data, colors, std::make_index_sequence<_fmt_str.field_count>{});
     }
 
   private:
-    static constexpr ParsedPattern<MaxFmtStrLen, MaxFields> _parsed_pattern
+    static constexpr ParsedPattern<MaxFmtStrLen, MaxFields> _fmt_str
         = parse_pattern<Pattern, MaxFields, MaxFmtStrLen>();
 
     // Asserts for nicer error msgs
-    static_assert(_parsed_pattern.error != ParsingError::UnterminatedBrace,
+    static_assert(_fmt_str.error != ParsingError::UnterminatedBrace,
                   "pattern contains unterminated '{'");
-    static_assert(_parsed_pattern.error != ParsingError::EmptyFieldName,
+    static_assert(_fmt_str.error != ParsingError::EmptyFieldName,
                   "pattern contains empty '{}'");
-    static_assert(_parsed_pattern.error != ParsingError::UnknownFieldName,
+    static_assert(_fmt_str.error != ParsingError::UnknownFieldType,
                   "pattern contains unknown field name");
-    static_assert(_parsed_pattern.error != ParsingError::UnknownFormatSpec,
-                  "pattern contains unknown format spec");
-    static_assert(_parsed_pattern.error != ParsingError::InvalidSpecUsage,
-                  "pattern contains invalid field/spec combination");
-    static_assert(_parsed_pattern.error != ParsingError::TooManyFields,
+    static_assert(_fmt_str.error != ParsingError::InvalidFieldSpec,
+                  "pattern contains unknown or invalid format spec");
+    static_assert(_fmt_str.error != ParsingError::TooManyFields,
                   "pattern contains too many fields (use "
                   "papper_set_long_pattern() instead)");
-    static_assert(_parsed_pattern.error != ParsingError::UnmatchedClosingBrace,
+    static_assert(_fmt_str.error != ParsingError::UnmatchedClosingBrace,
                   "pattern contains '}' with no matching "
                   "opening brace '{'");
 
-    template <std::size_t... I>
-    std::string format_impl(const PatternData& data, std::index_sequence<I...>)
+    template <size_t... I>
+    std::string format_impl(const PatternData& data,
+                            const ColorConfiguration* colors,
+                            std::index_sequence<I...>)
     {
-        constexpr std::string_view fmt_sv = _parsed_pattern.fmt_str_to_sv();
+        constexpr std::string_view fmt_sv = _fmt_str.fmt_str_to_sv();
 
         auto args = std::tuple_cat(
-            expand_and_process_format_arg<_parsed_pattern.specs[I]>(
-                get_field<_parsed_pattern.fields[I]>(data))...);
+            expand_and_process_format_arg<_fmt_str.fields[I].spec>(
+                get_field<_fmt_str.fields[I]>(data, colors))...);
 
         return std::apply(
             [&fmt_sv](auto... x) {
@@ -497,9 +571,9 @@ class PatternFormatterHandler
     PatternFormatterHandler()
     {
         // Set default pattern
-        _formatter
-            = new PatternFormatter<"[{time:HMSf}] ({level}) "
-                                   "({file:nameonly}:{line}) {message}">;
+        _formatter = new PatternFormatter<
+            "{color:level}[{time:HMSf}] ({level}) "
+            "({file:nameonly}:{line}) {message}{color:reset}">;
     }
 
     ~PatternFormatterHandler()
@@ -511,11 +585,37 @@ class PatternFormatterHandler
 
         if (_formatter != nullptr)
             delete _formatter;
+
+        ColorConfiguration* pending_colors
+            = _pending_new_colors.exchange(nullptr, std::memory_order_acq_rel);
+        if (pending_colors != nullptr)
+            delete pending_colors;
     }
 
-    std::string format(const PatternData& data)
+    std::string format(const PatternData& data, const bool colored_output)
     {
-        return _formatter->format(data);
+        return _formatter->format(data, colored_output ? &_colors : nullptr);
+    }
+
+    // Can be called by any thread
+    void queue_new_colors(const ColorConfiguration& colors)
+    {
+        ColorConfiguration* prev = _pending_new_colors.exchange(
+            new ColorConfiguration{ colors }, std::memory_order_acq_rel);
+        if (prev != nullptr)
+            delete prev;
+    }
+
+    // May ONLY be called by the backend thread
+    void poll_for_pending_colors_switch()
+    {
+        ColorConfiguration* new_colors
+            = _pending_new_colors.exchange(nullptr, std::memory_order_acq_rel);
+        if (new_colors != nullptr)
+        {
+            _colors = std::move(*new_colors);
+            delete new_colors;
+        }
     }
 
     void queue_new_formatter(PatternFormatterBase* formatter)
@@ -542,5 +642,8 @@ class PatternFormatterHandler
   private:
     PatternFormatterBase* _formatter;
     std::atomic<PatternFormatterBase*> _pending_new_formatter = nullptr;
+
+    ColorConfiguration _colors;
+    std::atomic<ColorConfiguration*> _pending_new_colors = nullptr;
 };
 }

@@ -4,6 +4,10 @@
 #include <cstdio>
 #include <string_view>
 
+#include <unistd.h>
+
+#include "color.h"
+
 namespace papper::detail
 {
 
@@ -24,13 +28,14 @@ class SinkHandler
 
     // Can be called by any thread
     void queue_new_sink(FILE* file, const int buffering_mode,
-                        const size_t buffer_size)
+                        const size_t buffer_size, const ColorMode color_mode)
     {
         if (file == nullptr)
             return;
 
-        SinkDescriptor* new_sink
-            = new SinkDescriptor{ file, buffering_mode, buffer_size };
+        SinkDescriptor* new_sink = new SinkDescriptor{
+            file, buffering_mode, buffer_size, color_mode
+        };
 
         SinkDescriptor* prev
             = _pending_new_sink.exchange(new_sink, std::memory_order_acq_rel);
@@ -59,6 +64,12 @@ class SinkHandler
     }
 
     // May ONLY be called by the backend thread
+    bool colored_output() const
+    {
+        return _colored_output;
+    }
+
+    // May ONLY be called by the backend thread
     void poll_for_pending_sink_switch()
     {
         SinkDescriptor* new_sink
@@ -73,12 +84,21 @@ class SinkHandler
                     nullptr,
                     new_sink->buffering_mode,
                     new_sink->buffer_size);
+            _colored_output
+                = resolve_color_mode(_file, new_sink->color_mode);
 
             delete new_sink;
         }
     }
 
   private:
+    static bool resolve_color_mode(FILE* file, const ColorMode color_mode)
+    {
+        if (color_mode == ColorMode::Auto)
+            return isatty(fileno(file)) == 1;
+        return color_mode == ColorMode::Always;
+    }
+
     void close_file(FILE* file)
     {
         if (file != stdout && file != stderr)
@@ -92,10 +112,12 @@ class SinkHandler
         FILE* file = stdout;
         int buffering_mode = _IOLBF;
         size_t buffer_size = BUFSIZ;
+        ColorMode color_mode = ColorMode::Auto;
     };
 
   private:
     FILE* _file = stdout;
+    bool _colored_output = resolve_color_mode(stdout, ColorMode::Auto);
     std::atomic<SinkDescriptor*> _pending_new_sink = nullptr;
 };
 
