@@ -6,12 +6,21 @@
 #include <iostream>
 #include <string>
 
-#if (defined(__x86_64__) || defined(__i386__))
+#include <ctime>
+
+#if defined(__x86_64__) || defined(__i386__) || defined(_M_X64)               \
+    || defined(_M_IX86)
+#define PAPPER_ARCH_X86
+#elif defined(__aarch64__) || defined(_M_ARM64)
+#define PAPPER_ARCH_ARM64
+#else
+#error "papper: unsupported CPU architecture"
+#endif
+
 #if defined(_MSC_VER)
 #include <intrin.h>
-#else
+#elif defined(PAPPER_ARCH_X86)
 #include <x86intrin.h>
-#endif
 #endif
 
 // A lot of the code here is taken from:
@@ -22,29 +31,38 @@ namespace papper::detail
 
 inline uint64_t read_tsc()
 {
-#if (defined(__aarch64__))
+#if defined(PAPPER_ARCH_ARM64) && defined(_MSC_VER)
+    // MSVC has no inline asm on ARM64. CNTVCT_EL0 is op0=3 op1=3 CRn=14
+    // CRm=0 op2=2
+    return _ReadStatusReg(ARM64_SYSREG(3, 3, 14, 0, 2));
+#elif defined(PAPPER_ARCH_ARM64)
     uint64_t count;
     __asm__ volatile("mrs \t%0, cntvct_el0" : "=r"(count));
     return count;
-#elif (defined(__x86_64__) || defined(__i386__))
+#elif defined(PAPPER_ARCH_X86)
     return __rdtsc();
 #endif
 }
 
-#if (defined(__aarch64__))
+#if defined(PAPPER_ARCH_ARM64)
 
 // On ARM you can read cntfrq_el0 to get the tick freq (guaranteed to be
 // invariant I think), and cntvct_el0 to get the tsc value
 
 inline bool get_tsc_ns_per_tick(double& tick_time)
 {
+#if defined(_MSC_VER)
+    // CNTFRQ_EL0 is op0=3 op1=3 CRn=14 CRm=0 op2=0
+    uint64_t freq = _ReadStatusReg(ARM64_SYSREG(3, 3, 14, 0, 0));
+#else
     uint64_t freq;
     __asm__ volatile("mrs \t%0, cntfrq_el0" : "=r"(freq));
+#endif
     tick_time = 1.0e9 / (double)freq;
     return true;
 }
 
-#elif (defined(__x86_64__) || defined(__i386__))
+#elif defined(PAPPER_ARCH_X86)
 
 // On x86 it's more difficult than on ARM because not every cpu supports
 // invariant tsc, and it's not standardized how you find out it it supports it
@@ -80,10 +98,20 @@ struct cpuid_t
 
 inline void x86_cpuid(int leaf, int subleaf, struct cpuid_t* p)
 {
+#if defined(_MSC_VER)
+    // MSVC has no inline asm on x64
+    int regs[4];
+    __cpuidex(regs, leaf, subleaf);
+    p->eax = regs[0];
+    p->ebx = regs[1];
+    p->ecx = regs[2];
+    p->edx = regs[3];
+#else
     __asm__ __volatile__(
         "cpuid"
         : "=a"(p->eax), "=b"(p->ebx), "=c"(p->ecx), "=d"(p->edx)
         : "a"(leaf), "c"(subleaf));
+#endif
 }
 
 inline std::string cpu_brand_name()
@@ -316,8 +344,17 @@ class Clock
     void recalculate_utc_offset()
     {
         std::time_t t = std::time(nullptr);
-        std::tm local = *std::localtime(&t);
-        std::tm utc = *std::gmtime(&t);
+        std::tm local;
+        std::tm utc;
+        // localtime/gmtime return a shared static buffer, which user threads
+        // could be using at the same time, so use the reentrant versions
+#if defined(_WIN32)
+        localtime_s(&local, &t); // Reversed arg order compared to C11
+        gmtime_s(&utc, &t);
+#else
+        localtime_r(&t, &local);
+        gmtime_r(&t, &utc);
+#endif
 
         int day_diff;
         if (local.tm_year != utc.tm_year)
