@@ -374,9 +374,9 @@ constexpr std::string_view level_to_name(LogLevel level)
     case LogLevel::Debug:
         return "DEBUG";
     case LogLevel::Info:
-        return "INFO";
+        return "INFO ";
     case LogLevel::Warn:
-        return "WARN";
+        return "WARN ";
     case LogLevel::Error:
         return "ERROR";
     }
@@ -401,7 +401,7 @@ std::string_view get_color(const LogLevel level,
     else if constexpr (Spec == PatternFieldSpec::ColorBlue)
         return Color::blue;
     else
-        static_assert(sizeof(int) == 0,
+        static_assert(false,
                       "spec is not a color"); // Should be unreachable
 }
 
@@ -431,7 +431,7 @@ constexpr decltype(auto) get_field(const PatternData& data,
     else if constexpr (FieldType == PatternFieldType::ThreadName)
         return (data.thread_name);
     else
-        static_assert(sizeof(int) == 0,
+        static_assert(false,
                       "field is invalid"); // Should be unreachable
 }
 

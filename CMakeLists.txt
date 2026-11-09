@@ -18,11 +18,6 @@ add_library(papper::papper ALIAS papper)
 
 target_compile_features(papper INTERFACE cxx_std_20)
 
-# MSVC's traditional preprocessor doesn't support __VA_OPT__
-target_compile_options(papper INTERFACE
-  $<$<CXX_COMPILER_ID:MSVC>:/Zc:preprocessor>
-)
-
 target_include_directories(papper
   INTERFACE
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>

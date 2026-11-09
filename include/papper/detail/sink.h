@@ -1,38 +1,15 @@
 #pragma once
 
 #include <atomic>
-#include <cstdint>
 #include <cstdio>
 #include <string_view>
 
-#if defined(_WIN32)
-#include <io.h>
-
-// Declared manually instead of including windows.h, so that papper doesn't
-// leak its macros (min, max, ERROR etc) into user code. The signatures match
-// the ones in windows.h (BOOL = int, HANDLE = void*, DWORD = unsigned long), so
-// they don't conflict if the user includes windows.h as well
-extern "C" __declspec(dllimport) int __stdcall GetConsoleMode(void*,
-                                                             unsigned long*);
-extern "C" __declspec(dllimport) int __stdcall SetConsoleMode(void*,
-                                                             unsigned long);
-#else
 #include <unistd.h>
-#endif
 
 #include "color.h"
 
 namespace papper::detail
 {
-
-#if defined(_WIN32)
-namespace win32
-{
-// Same values as in windows.h
-inline void* const invalid_handle_value = (void*)(intptr_t)-1;
-constexpr unsigned long enable_virtual_terminal_processing = 0x0004;
-}
-#endif
 
 class SinkHandler
 {
@@ -84,12 +61,6 @@ class SinkHandler
     {
         fwrite(str.data(), 1, str.size(), _file);
         fputc('\n', _file);
-#if defined(_WIN32)
-        // The MS CRT treats _IOLBF as _IOFBF, so line buffering has to be done
-        // manually
-        if (_buffering_mode == _IOLBF)
-            fflush(_file);
-#endif
     }
 
     // May ONLY be called by the backend thread
@@ -113,7 +84,6 @@ class SinkHandler
                     nullptr,
                     new_sink->buffering_mode,
                     new_sink->buffer_size);
-            _buffering_mode = new_sink->buffering_mode;
             _colored_output
                 = resolve_color_mode(_file, new_sink->color_mode);
 
@@ -122,37 +92,11 @@ class SinkHandler
     }
 
   private:
-    // Returns true if file is a terminal that will interpret ANSI codes
-    static bool is_ansi_terminal(FILE* file)
-    {
-#if defined(_WIN32)
-        // _isatty is true for any character device (NUL etc), so check for an
-        // actual console instead
-        void* handle = (void*)_get_osfhandle(_fileno(file));
-        unsigned long mode = 0;
-        if (handle == win32::invalid_handle_value
-            || !GetConsoleMode(handle, &mode))
-            return false;
-
-        // The console has to be told to interpret ANSI codes. Fails before
-        // Windows 10, in which case we can't color
-        return (mode & win32::enable_virtual_terminal_processing)
-               || SetConsoleMode(
-                   handle, mode | win32::enable_virtual_terminal_processing);
-#else
-        return isatty(fileno(file)) == 1;
-#endif
-    }
-
     static bool resolve_color_mode(FILE* file, const ColorMode color_mode)
     {
-        if (color_mode == ColorMode::Never)
-            return false;
-
-        // Always call this, since on Windows it also enables ANSI codes in the
-        // console for ColorMode::Always
-        const bool ansi_terminal = is_ansi_terminal(file);
-        return color_mode == ColorMode::Always || ansi_terminal;
+        if (color_mode == ColorMode::Auto)
+            return isatty(fileno(file)) == 1;
+        return color_mode == ColorMode::Always;
     }
 
     void close_file(FILE* file)
@@ -173,7 +117,6 @@ class SinkHandler
 
   private:
     FILE* _file = stdout;
-    int _buffering_mode = _IOLBF;
     bool _colored_output = resolve_color_mode(stdout, ColorMode::Auto);
     std::atomic<SinkDescriptor*> _pending_new_sink = nullptr;
 };
