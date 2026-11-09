@@ -174,19 +174,14 @@ class Backend
     }
 
     void queue_new_sink(FILE* file, const int buffering_mode,
-                        const size_t buffer_size, const ColorMode color_mode)
+                        const size_t buffer_size)
     {
-        _sink.queue_new_sink(file, buffering_mode, buffer_size, color_mode);
+        _sink.queue_new_sink(file, buffering_mode, buffer_size);
     }
 
     void queue_new_pattern_formatter(PatternFormatterBase* formatter)
     {
         _pattern_formatter.queue_new_formatter(formatter);
-    }
-
-    void queue_new_colors(const ColorConfiguration& colors)
-    {
-        _pattern_formatter.queue_new_colors(colors);
     }
 
     void set_new_minimum_log_level(const LogLevel new_level)
@@ -261,7 +256,7 @@ class Backend
             .message = message,
         };
         std::string formatted_message
-            = _pattern_formatter.format(pattern_data, _sink.colored_output());
+            = _pattern_formatter.format(pattern_data);
 
         _sink.write_str_and_endl(formatted_message);
 
@@ -345,7 +340,6 @@ class Backend
             {
                 _sink.poll_for_pending_sink_switch();
                 _pattern_formatter.poll_for_pending_formatter_switch();
-                _pattern_formatter.poll_for_pending_colors_switch();
 
                 try_resync_clock();
 

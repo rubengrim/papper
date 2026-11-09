@@ -33,10 +33,9 @@ PatternData make_data(std::string_view message = "hello")
 }
 
 template <StaticString Pattern>
-std::string format(const PatternData& data = make_data(),
-                   const papper::ColorConfiguration* colors = nullptr)
+std::string format(const PatternData& data = make_data())
 {
-    return PatternFormatter<Pattern>{}.format(data, colors);
+    return PatternFormatter<Pattern>{}.format(data);
 }
 
 template <StaticString Pattern>
@@ -50,20 +49,22 @@ constexpr ParsingError parse_error()
 TEST_CASE("pattern: plain fields")
 {
     CHECK(format<"{message}">() == "hello");
+    CHECK(format<"{m}">() == "hello");
     CHECK(format<"{level}">() == "WARN");
     CHECK(format<"{thread}">() == "worker");
     CHECK(format<"{line}">() == "123");
     CHECK(format<"{function}">() == "void do_stuff()");
     CHECK(format<"{file}">() == "/home/user/project/src/file.cpp");
+    CHECK(format<"{file:path}">() == "/home/user/project/src/file.cpp");
 }
 
 TEST_CASE("pattern: literal text and multiple fields")
 {
     CHECK(format<"">() == "");
     CHECK(format<"no fields">() == "no fields");
-    CHECK(format<"<{level}> [{thread}] {file:nameonly}:{line} - {message}!">()
+    CHECK(format<"<{level}> [{thread}] {file:nameonly}:{line} - {m}!">()
           == "<WARN> [worker] file.cpp:123 - hello!");
-    CHECK(format<"{message}{message}">() == "hellohello");
+    CHECK(format<"{m}{m}">() == "hellohello");
 }
 
 TEST_CASE("pattern: all levels have names")
@@ -84,12 +85,12 @@ TEST_CASE("pattern: all levels have names")
 TEST_CASE("pattern: escaped braces are emitted literally")
 {
     CHECK(format<"{{{level}}}">() == "{WARN}");
-    CHECK(format<"{{message}}">() == "{message}");
+    CHECK(format<"{{m}}">() == "{m}");
 }
 
 TEST_CASE("pattern: braces inside the message are not interpreted")
 {
-    CHECK(format<"{message}">(make_data("{} {0} }{")) == "{} {0} }{");
+    CHECK(format<"{m}">(make_data("{} {0} }{")) == "{} {0} }{");
 }
 
 TEST_CASE("pattern: file name only strips directories")
@@ -113,44 +114,18 @@ TEST_CASE("pattern: time precision specs")
 
 TEST_CASE("pattern: invalid patterns are rejected at compile time")
 {
-    static_assert(parse_error<"{level} {message}">() == ParsingError::None);
+    static_assert(parse_error<"{level} {m}">() == ParsingError::None);
     static_assert(parse_error<"{level">() == ParsingError::UnterminatedBrace);
     static_assert(parse_error<"{}">() == ParsingError::EmptyFieldName);
-    static_assert(parse_error<"{nope}">() == ParsingError::UnknownFieldType);
+    static_assert(parse_error<"{nope}">() == ParsingError::UnknownFieldName);
     static_assert(parse_error<"{time:nope}">()
-                  == ParsingError::InvalidFieldSpec);
+                  == ParsingError::UnknownFormatSpec);
     static_assert(parse_error<"{level:HMS}">()
-                  == ParsingError::InvalidFieldSpec);
+                  == ParsingError::InvalidSpecUsage);
     static_assert(parse_error<"{line:nameonly}">()
-                  == ParsingError::InvalidFieldSpec);
-    static_assert(parse_error<"{color}">() == ParsingError::InvalidFieldSpec);
-    static_assert(parse_error<"{color:nope}">()
-                  == ParsingError::InvalidFieldSpec);
-    static_assert(parse_error<"{color:level}{color:reset}{color:blue}">()
-                  == ParsingError::None);
-    static_assert(
-        parse_error<"{message}{message}{message}{message}{message}">()
-        == ParsingError::TooManyFields);
+                  == ParsingError::InvalidSpecUsage);
+    static_assert(parse_error<"{m}{m}{m}{m}{m}">()
+                  == ParsingError::TooManyFields);
     static_assert(parse_error<"level}">()
                   == ParsingError::UnmatchedClosingBrace);
-}
-
-TEST_CASE("pattern: color fields are empty without colors")
-{
-    CHECK(format<"{color:level}{level}{color:reset} {color:blue}{line}">()
-          == "WARN 123");
-}
-
-TEST_CASE("pattern: color fields use the configured colors")
-{
-    const papper::ColorConfiguration colors{ .warn = "<warn>" };
-    CHECK(format<"{color:level}{level}{color:reset} {color:blue}{line}">(
-              make_data(), &colors)
-          == std::string("<warn>WARN") + papper::Color::reset + " "
-                 + papper::Color::blue + "123");
-
-    auto data = make_data();
-    data.level = LogLevel::Error;
-    CHECK(format<"{color:level}{level}">(data, &colors)
-          == std::string(papper::Color::red) + "ERROR");
 }

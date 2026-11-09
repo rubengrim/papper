@@ -126,7 +126,7 @@ class LogCapture
 // A pattern without timestamps etc. so output can be compared exactly
 void set_simple_pattern()
 {
-    PAPPER_SET_PATTERN("{level}|{thread}|{message}");
+    PAPPER_SET_PATTERN("{level}|{thread}|{m}");
 }
 
 struct LevelGuard
@@ -189,7 +189,7 @@ TEST_CASE("logging: every level macro logs with its level")
 
 TEST_CASE("logging: arguments of different types are formatted")
 {
-    PAPPER_SET_PATTERN("{message}");
+    PAPPER_SET_PATTERN("{m}");
     LogCapture capture;
 
     PAPPER_INFO("no args");
@@ -216,7 +216,7 @@ TEST_CASE("logging: arguments of different types are formatted")
 
 TEST_CASE("logging: string arguments are copied at the call site")
 {
-    PAPPER_SET_PATTERN("{message}");
+    PAPPER_SET_PATTERN("{m}");
     LogCapture capture;
 
     {
@@ -281,7 +281,7 @@ TEST_CASE("logging: thread names")
 
 TEST_CASE("logging: many threads, no lost or reordered events")
 {
-    PAPPER_SET_PATTERN("{thread} {message}");
+    PAPPER_SET_PATTERN("{thread} {m}");
     LogCapture capture;
 
     constexpr int n_threads = 4;
@@ -332,7 +332,7 @@ TEST_CASE("logging: many threads, no lost or reordered events")
 
 TEST_CASE("logging: a full queue drops events without corrupting others")
 {
-    PAPPER_SET_PATTERN("{message}");
+    PAPPER_SET_PATTERN("{m}");
     LogCapture capture;
 
     constexpr int n = 20000;
@@ -368,7 +368,7 @@ TEST_CASE("logging: a full queue drops events without corrupting others")
 
 TEST_CASE("logging: switching sinks redirects output")
 {
-    PAPPER_SET_PATTERN("{message}");
+    PAPPER_SET_PATTERN("{m}");
 
     LogCapture first;
     PAPPER_INFO("to first");

@@ -14,24 +14,22 @@ enum class FlushOn
 };
 
 inline void set_sink(FILE* file, const FlushOn flush_on = FlushOn::LineEnd,
-                     const size_t buffer_size = BUFSIZ,
-                     const ColorMode color_mode = ColorMode::Auto)
+                     const size_t buffer_size = BUFSIZ)
 {
     detail::Backend::get_or_create_instance().queue_new_sink(
-        file, (int)flush_on, buffer_size, color_mode);
+        file, (int)flush_on, buffer_size);
 }
 
 [[nodiscard]] inline int set_sink(const char* filename,
                                   const bool truncate = false,
                                   const FlushOn flush_on = FlushOn::LineEnd,
-                                  const size_t buffer_size = BUFSIZ,
-                                  const ColorMode color_mode = ColorMode::Auto)
+                                  const size_t buffer_size = BUFSIZ)
 {
     FILE* new_sink = fopen(filename, truncate ? "w" : "a");
     if (!new_sink)
         return errno;
 
-    set_sink(new_sink, flush_on, buffer_size, color_mode);
+    set_sink(new_sink, flush_on, buffer_size);
 
     return 0;
 }
@@ -56,12 +54,6 @@ inline void init_thread(std::string_view thread_name = "",
 inline void set_level(const LogLevel level)
 {
     detail::Backend::get_or_create_instance().set_new_minimum_log_level(level);
-}
-
-// Sets the colors used for {color:level} in the pattern
-inline void set_colors(const ColorConfiguration& colors)
-{
-    detail::Backend::get_or_create_instance().queue_new_colors(colors);
 }
 
 } // end namespace papper

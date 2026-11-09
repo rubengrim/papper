@@ -1,2 +1,1 @@
 - Filter levels at frontent
-- Make it so you can add a marker to the pattern where the parser will align everything to the right so that everything is the same across log levels (level names have different lengths)
