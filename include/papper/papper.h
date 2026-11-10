@@ -34,6 +34,23 @@ inline void set_sink(FILE* file, const FlushOn flush_on = FlushOn::LineEnd,
     return 0;
 }
 
+// Will enable colored output for sinks that support it
+inline void enable_colors()
+{
+    detail::Backend::get_or_create_instance().set_colors_enabled(true);
+}
+
+// Disables colored output for all sinks
+inline void disable_colors()
+{
+    detail::Backend::get_or_create_instance().set_colors_enabled(false);
+}
+
+inline void set_colors(const ColorConfig& colors)
+{
+    detail::Backend::get_or_create_instance().queue_new_colors(colors);
+}
+
 // Sets the default queue size for threads created in the future.
 // Can still be overridden by allocate()
 // Will NOT reallocate/touch existing thread queues.
@@ -117,7 +134,7 @@ inline void set_level(const LogLevel level)
         .queue_new_pattern_formatter(fmt);                                     \
 }
 
-// Use this if you need more fields, or if the expanded internal format
+// Use this version if you need more fields, or if the expanded internal format
 // string length reaches its max
 #define PAPPER_SET_LONG_PATTERN(pattern, max_fields, max_expanded_fmt_str_len) \
 {                                                                              \
