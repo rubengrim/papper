@@ -3,7 +3,8 @@
 //
 // The backend is asynchronous, so sink/pattern switches and log events are
 // only visible once the backend thread got to them. LogCapture deals with this
-// by logging unique marker messages and waiting for them to show up in the file.
+// by logging unique marker messages and waiting for them to show up in the
+// file.
 
 #include <doctest/doctest.h>
 
@@ -104,7 +105,8 @@ class LogCapture
     {
         const auto deadline = std::chrono::steady_clock::now() + timeout;
         auto result = lines();
-        while (result.size() < n && std::chrono::steady_clock::now() < deadline)
+        while (result.size() < n
+               && std::chrono::steady_clock::now() < deadline)
         {
             std::this_thread::sleep_for(5ms);
             result = lines();
@@ -126,7 +128,7 @@ class LogCapture
 // A pattern without timestamps etc. so output can be compared exactly
 void set_simple_pattern()
 {
-    PAPPER_SET_PATTERN("{level}|{thread}|{m}");
+    PAPPER_SET_PATTERN("{level}|{thread}|{message}");
 }
 
 struct LevelGuard
@@ -139,9 +141,10 @@ struct LevelGuard
 
 } // namespace
 
-TEST_CASE("logging: default pattern has local time, level, location and message")
+TEST_CASE(
+    "logging: default pattern has local time, level, location and message")
 {
-    PAPPER_SET_PATTERN("[{time:HMSf}] ({level}) ({file:nameonly}:{line}) "
+    PAPPER_SET_PATTERN("[{time:HMSus}] ({level}) ({file:nameonly}:{line}) "
                        "{message}");
     LogCapture capture;
 
@@ -189,7 +192,7 @@ TEST_CASE("logging: every level macro logs with its level")
 
 TEST_CASE("logging: arguments of different types are formatted")
 {
-    PAPPER_SET_PATTERN("{m}");
+    PAPPER_SET_PATTERN("{message}");
     LogCapture capture;
 
     PAPPER_INFO("no args");
@@ -216,7 +219,7 @@ TEST_CASE("logging: arguments of different types are formatted")
 
 TEST_CASE("logging: string arguments are copied at the call site")
 {
-    PAPPER_SET_PATTERN("{m}");
+    PAPPER_SET_PATTERN("{message}");
     LogCapture capture;
 
     {
@@ -281,7 +284,7 @@ TEST_CASE("logging: thread names")
 
 TEST_CASE("logging: many threads, no lost or reordered events")
 {
-    PAPPER_SET_PATTERN("{thread} {m}");
+    PAPPER_SET_PATTERN("{thread} {message}");
     LogCapture capture;
 
     constexpr int n_threads = 4;
@@ -332,14 +335,15 @@ TEST_CASE("logging: many threads, no lost or reordered events")
 
 TEST_CASE("logging: a full queue drops events without corrupting others")
 {
-    PAPPER_SET_PATTERN("{m}");
+    PAPPER_SET_PATTERN("{message}");
     LogCapture capture;
 
     constexpr int n = 20000;
     std::thread worker([&] {
         papper::init_thread("tiny", 512);
         for (int i = 0; i < n; ++i)
-            PAPPER_INFO("{} {}", i, std::string("some payload to fill the queue"));
+            PAPPER_INFO(
+                "{} {}", i, std::string("some payload to fill the queue"));
         // Later events must still get through once there is room again
         capture.sync();
     });
@@ -368,7 +372,7 @@ TEST_CASE("logging: a full queue drops events without corrupting others")
 
 TEST_CASE("logging: switching sinks redirects output")
 {
-    PAPPER_SET_PATTERN("{m}");
+    PAPPER_SET_PATTERN("{message}");
 
     LogCapture first;
     PAPPER_INFO("to first");
@@ -380,6 +384,21 @@ TEST_CASE("logging: switching sinks redirects output")
 
     CHECK(first.lines() == std::vector<std::string>{ "to first" });
     CHECK(second.lines() == std::vector<std::string>{ "to second" });
+}
+
+TEST_CASE("logging: file sinks never get color codes")
+{
+    papper::enable_colors();
+    PAPPER_SET_PATTERN("{color:level}{level}{color:reset} {message}");
+    LogCapture capture;
+
+    PAPPER_WARN("plain");
+    capture.sync();
+
+    const auto lines = capture.lines();
+    REQUIRE(lines.size() == 1);
+    CHECK(lines[0] == "WARN plain");
+    CHECK(lines[0].find('\033') == std::string::npos);
 }
 
 TEST_CASE("logging: set_sink returns errno for a file that can't be opened")

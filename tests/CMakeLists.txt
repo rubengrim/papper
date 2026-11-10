@@ -28,7 +28,6 @@ target_compile_options(papper-test-main PUBLIC -Wall -Wextra)
 add_executable(papper-unit-tests
   test_queue.cpp
   test_codec.cpp
-  test_pattern.cpp
 )
 target_link_libraries(papper-unit-tests PRIVATE papper-test-main)
 

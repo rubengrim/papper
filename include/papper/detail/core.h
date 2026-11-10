@@ -154,9 +154,6 @@ class Backend
         {
             _backend_thread.join();
         }
-
-        // Only free after the backend thread, which uses it, has stopped
-        delete[] _queue_copy;
     }
 
   public:
@@ -181,7 +178,17 @@ class Backend
 
     void queue_new_pattern_formatter(PatternFormatterBase* formatter)
     {
-        _pattern_formatter.queue_new_formatter(formatter);
+        _sink.queue_new_pattern_formatter(formatter);
+    }
+
+    void set_colors_enabled(bool enabled)
+    {
+        _sink.set_colors_enabled(enabled);
+    }
+
+    void queue_new_colors(const ColorConfig& colors)
+    {
+        _sink.queue_new_colors(colors);
     }
 
     void set_new_minimum_log_level(const LogLevel new_level)
@@ -245,7 +252,7 @@ class Backend
             return total_event_size; // Drop the event if too low level
         }
 
-        PatternData pattern_data = {
+        MessageData message_data = {
             .level = header.static_data->level,
             .thread_name = header.thread_name,
             .timestamp
@@ -255,10 +262,7 @@ class Backend
             .linenumber = header.static_data->location.line(),
             .message = message,
         };
-        std::string formatted_message
-            = _pattern_formatter.format(pattern_data);
-
-        _sink.write_str_and_endl(formatted_message);
+        _sink.format_and_write(message_data);
 
         return total_event_size;
     }
@@ -339,7 +343,8 @@ class Backend
             while (_running.load(std::memory_order_acquire))
             {
                 _sink.poll_for_pending_sink_switch();
-                _pattern_formatter.poll_for_pending_formatter_switch();
+                _sink.poll_for_pending_formatter_switch();
+                _sink.poll_for_pending_color_switch();
 
                 try_resync_clock();
 
@@ -369,13 +374,9 @@ class Backend
     }
 
   private:
-    // Holds a local copy of the raw message data in a thread queue
-    std::byte* _queue_copy = new std::byte[1];
-
     std::atomic<bool> _running = false;
     std::atomic<ThreadContextNode*> _head = nullptr;
     SinkHandler _sink;
-    PatternFormatterHandler _pattern_formatter;
     std::atomic<LogLevel> min_log_level = LogLevel::Trace;
     Clock _clock;
     std::thread _backend_thread;

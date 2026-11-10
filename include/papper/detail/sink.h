@@ -1,8 +1,14 @@
 #pragma once
 
+#include "papper/detail/pattern.h"
 #include <atomic>
 #include <cstdio>
-#include <string_view>
+#include <cstdlib>
+#include <cstring>
+
+#if defined(__unix__) || defined(__APPLE__)
+#include <unistd.h>
+#endif
 
 namespace papper::detail
 {
@@ -19,10 +25,17 @@ class SinkHandler
             close_file(pending->file);
             delete pending;
         }
-        close_file(_file);
+        close_file(_sink);
     }
 
-    // Can be called by any thread
+    void format_and_write(const MessageData& data)
+    {
+        std::string formatted_message = _pattern_formatter.format(
+            data, _colors_enabled && _sink_supports_colors);
+        fwrite(formatted_message.data(), 1, formatted_message.size(), _sink);
+        fputc('\n', _sink);
+    }
+
     void queue_new_sink(FILE* file, const int buffering_mode,
                         const size_t buffer_size)
     {
@@ -41,41 +54,50 @@ class SinkHandler
         }
     }
 
-    // May ONLY be called by the backend thread
-    // Note: Does not check for pending sink switch, that must be handled
-    // by caller
-    void write(std::string_view str)
+    void queue_new_pattern_formatter(PatternFormatterBase* formatter)
     {
-        fwrite(str.data(), 1, str.size(), _file);
+        _pattern_formatter.queue_new_pattern_formatter(formatter);
     }
 
-    // May ONLY be called by the backend thread
-    // Note: Does not check for pending sink switch, that must be handled
-    // by caller
-    void write_str_and_endl(std::string_view str)
+    void set_colors_enabled(bool enabled)
     {
-        fwrite(str.data(), 1, str.size(), _file);
-        fputc('\n', _file);
+        _colors_enabled = enabled;
     }
 
-    // May ONLY be called by the backend thread
+    void queue_new_colors(const ColorConfig& colors)
+    {
+        _pattern_formatter.queue_new_colors(colors);
+    }
+
     void poll_for_pending_sink_switch()
     {
         SinkDescriptor* new_sink
             = _pending_new_sink.exchange(nullptr, std::memory_order_acq_rel);
         if (new_sink != nullptr)
         {
-            fflush(_file);
-            close_file(_file);
-            _file = new_sink->file;
+            fflush(_sink);
+            close_file(_sink);
+            _sink = new_sink->file;
             // TODO: setvbuf could fail, so might want to catch that somehow
-            setvbuf(_file,
+            setvbuf(_sink,
                     nullptr,
                     new_sink->buffering_mode,
                     new_sink->buffer_size);
 
+            _sink_supports_colors = get_sink_color_support();
+
             delete new_sink;
         }
+    }
+
+    void poll_for_pending_formatter_switch()
+    {
+        _pattern_formatter.poll_for_pending_formatter_switch();
+    }
+
+    void poll_for_pending_color_switch()
+    {
+        _pattern_formatter.poll_for_pending_color_switch();
     }
 
   private:
@@ -87,6 +109,42 @@ class SinkHandler
         }
     }
 
+    bool get_sink_color_support() const
+    {
+#if defined(__unix__) || defined(__APPLE__)
+        if (_sink == nullptr)
+            return false;
+
+        // Check if sink is regular file
+        const int fd = fileno(_sink);
+        if (fd < 0 || !isatty(fd))
+        {
+            return false;
+        }
+
+        // Check if sink is terminal but still doesn't support color codes
+        const char* term = std::getenv("TERM");
+        if (term == nullptr || term[0] == '\0'
+            || std::strcmp(term, "dumb") == 0)
+        {
+            return false;
+        }
+
+        // no-color.org
+        const char* no_color = std::getenv("NO_COLOR");
+        if (no_color != nullptr && no_color[0] != '\0')
+        {
+            return false;
+        }
+
+        return true;
+#else
+        // No windows support for now I don't know how this works there
+        return false;
+#endif
+    }
+
+  private:
     struct SinkDescriptor
     {
         FILE* file = stdout;
@@ -95,8 +153,11 @@ class SinkHandler
     };
 
   private:
-    FILE* _file = stdout;
+    FILE* _sink = stdout;
     std::atomic<SinkDescriptor*> _pending_new_sink = nullptr;
+    PatternFormatterHandler _pattern_formatter;
+    bool _colors_enabled = true; // If true, use colors when sink supports it
+    bool _sink_supports_colors = get_sink_color_support();
 };
 
 }
