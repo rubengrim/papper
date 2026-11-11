@@ -38,7 +38,7 @@ class Queue
     struct WriteReservation
     {
         std::byte* buffer;
-        const size_t new_write_pos;
+        size_t new_write_pos;
     };
 
     WriteReservation reserve_write(const size_t size) noexcept

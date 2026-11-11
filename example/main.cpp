@@ -1,4 +1,5 @@
 #include "papper/detail/color.h"
+#include "papper/detail/core.h"
 #include "papper/detail/time.h"
 #include "papper/papper.h"
 #include <chrono>
@@ -88,24 +89,34 @@ int main()
     // }
     // perf_command("disable\n", 8);
 
-    papper::set_colors(papper::ColorConfig{ .trace = papper::Color::green });
+    PAPPER_DEBUG("i terminal");
+    int _ = papper::set_sink("log.txt", true);
+    PAPPER_DEBUG("i fil");
+    papper::init_thread("tråd55");
 
-    PAPPER_SET_PATTERN("{color:blue}{time:HMSns}{color:reset} "
-                       "{color:level}{message}{color:reset}");
+    papper::set_sink(stdout);
+    PAPPER_TRACE("vit trace");
+    PAPPER_DEBUG("blå debug");
+    papper::set_colors(papper::ColorConfig{ .trace = papper::Color::black,
+                                            .debug = papper::Color::red });
+    PAPPER_TRACE("svart trace");
+    PAPPER_DEBUG("röd debug");
 
-    PAPPER_TRACE("hej {}, {}", 1, "hopp");
-    PAPPER_DEBUG("hej {}, {}", 1, "hopp");
-    PAPPER_INFO("hej {}, {}", 1, "hopp");
-    PAPPER_WARN("hej {}, {}", 1, "hopp");
-    PAPPER_ERROR("hej {}, {}", 1, "hopp");
+    PAPPER_SET_PATTERN(
+        "{color:level}{time:HMS} {thread} {message}{color:reset}");
+    PAPPER_WARN("ny pattern");
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    papper::disable_colors();
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    // PAPPER_INFO("hej {}, {}", 1, "hopp");
+    // PAPPER_WARN("hej {}, {}", 1, "hopp");
+    // PAPPER_ERROR("hej {}, {}", 1, "hopp");
 
-    PAPPER_TRACE("hej {}, {}", 1, "ropp");
-    PAPPER_DEBUG("hej {}, {}", 1, "ropp");
-    PAPPER_INFO("hej {}, {}", 1, "hrpp");
-    PAPPER_WARN("hej {}, {}", 1, "hrpp");
-    PAPPER_ERROR("hej {}, {}", 1, "ropp");
+    // // std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    // // papper::disable_colors();
+    // // std::this_thread::sleep_for(std::chrono::milliseconds(1));
+
+    // PAPPER_TRACE("hej {}, {}", 1, "ropp");
+    // PAPPER_DEBUG("hej {}, {}", 1, "ropp");
+    // PAPPER_INFO("hej {}, {}", 1, "hrpp");
+    // PAPPER_WARN("hej {}, {}", 1, "hrpp");
+    // PAPPER_ERROR("hej {}, {}", 1, "ropp");
 }

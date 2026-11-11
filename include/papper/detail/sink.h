@@ -1,10 +1,11 @@
 #pragma once
 
+#include "papper/detail/color.h"
 #include "papper/detail/pattern.h"
-#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 
 #if defined(__unix__) || defined(__APPLE__)
 #include <unistd.h>
@@ -18,13 +19,7 @@ class SinkHandler
   public:
     ~SinkHandler()
     {
-        SinkDescriptor* pending
-            = _pending_new_sink.exchange(nullptr, std::memory_order_acq_rel);
-        if (pending != nullptr)
-        {
-            close_file(pending->file);
-            delete pending;
-        }
+        fflush(_sink);
         close_file(_sink);
     }
 
@@ -36,68 +31,37 @@ class SinkHandler
         fputc('\n', _sink);
     }
 
-    void queue_new_sink(FILE* file, const int buffering_mode,
-                        const size_t buffer_size)
+    void set_new_sink(FILE* file, const int buffering_mode,
+                      const size_t buffer_size)
     {
         if (file == nullptr)
             return;
 
-        SinkDescriptor* new_sink
-            = new SinkDescriptor{ file, buffering_mode, buffer_size };
+        fflush(_sink);
+        close_file(_sink);
 
-        SinkDescriptor* prev
-            = _pending_new_sink.exchange(new_sink, std::memory_order_acq_rel);
-        if (prev != nullptr)
-        {
-            close_file(prev->file);
-            delete prev;
-        }
+        _sink = file;
+
+        // TODO: setvbuf could fail, so might want to catch that somehow
+        setvbuf(_sink, nullptr, buffering_mode, buffer_size);
+
+        _sink_supports_colors = get_sink_color_support();
     }
 
-    void queue_new_pattern_formatter(PatternFormatterBase* formatter)
+    void set_new_pattern_formatter(
+        std::unique_ptr<const PatternFormatterBase> formatter)
     {
-        _pattern_formatter.queue_new_pattern_formatter(formatter);
+        _pattern_formatter.set_new_pattern_formatter(std::move(formatter));
+    }
+
+    void set_new_colors(std::unique_ptr<const ColorConfig> colors)
+    {
+        _pattern_formatter.set_new_colors(std::move(colors));
     }
 
     void set_colors_enabled(bool enabled)
     {
         _colors_enabled = enabled;
-    }
-
-    void queue_new_colors(const ColorConfig& colors)
-    {
-        _pattern_formatter.queue_new_colors(colors);
-    }
-
-    void poll_for_pending_sink_switch()
-    {
-        SinkDescriptor* new_sink
-            = _pending_new_sink.exchange(nullptr, std::memory_order_acq_rel);
-        if (new_sink != nullptr)
-        {
-            fflush(_sink);
-            close_file(_sink);
-            _sink = new_sink->file;
-            // TODO: setvbuf could fail, so might want to catch that somehow
-            setvbuf(_sink,
-                    nullptr,
-                    new_sink->buffering_mode,
-                    new_sink->buffer_size);
-
-            _sink_supports_colors = get_sink_color_support();
-
-            delete new_sink;
-        }
-    }
-
-    void poll_for_pending_formatter_switch()
-    {
-        _pattern_formatter.poll_for_pending_formatter_switch();
-    }
-
-    void poll_for_pending_color_switch()
-    {
-        _pattern_formatter.poll_for_pending_color_switch();
     }
 
   private:
@@ -139,25 +103,16 @@ class SinkHandler
 
         return true;
 #else
-        // No windows support for now I don't know how this works there
+        // No windows support for now I can't test on there
         return false;
 #endif
     }
 
   private:
-    struct SinkDescriptor
-    {
-        FILE* file = stdout;
-        int buffering_mode = _IOLBF;
-        size_t buffer_size = BUFSIZ;
-    };
-
-  private:
     FILE* _sink = stdout;
-    std::atomic<SinkDescriptor*> _pending_new_sink = nullptr;
-    PatternFormatterHandler _pattern_formatter;
-    bool _colors_enabled = true; // If true, use colors when sink supports it
     bool _sink_supports_colors = get_sink_color_support();
+    bool _colors_enabled = true; // If true, use colors if sink supports it
+    PatternFormatterHandler _pattern_formatter;
 };
 
 }

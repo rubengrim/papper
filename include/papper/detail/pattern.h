@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <iostream>
 #include <iterator>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -525,7 +526,8 @@ class PatternFormatterBase
   public:
     virtual ~PatternFormatterBase() = default;
     virtual std::string format(const MessageData& data,
-                               const ColorConfig& colors, bool use_colors) = 0;
+                               const ColorConfig& colors,
+                               bool use_colors) const = 0;
 };
 
 template <StaticString Pattern, size_t MaxFields = 16,
@@ -535,7 +537,7 @@ class PatternFormatter : public PatternFormatterBase
 {
   public:
     std::string format(const MessageData& data, const ColorConfig& colors,
-                       bool use_colors) override
+                       bool use_colors) const override
     {
         return format_impl(
             data,
@@ -567,7 +569,7 @@ class PatternFormatter : public PatternFormatterBase
 
     template <std::size_t... I>
     std::string format_impl(const MessageData& data, const ColorConfig& colors,
-                            bool use_colors, std::index_sequence<I...>)
+                            bool use_colors, std::index_sequence<I...>) const
     {
         constexpr std::string_view fmt_sv = _parsed_pattern.fmt_str_to_sv();
 
@@ -584,28 +586,17 @@ class PatternFormatter : public PatternFormatterBase
     }
 };
 
-// Handles runtime switching of formatter and colors
+// Handles switching of formatter and colors
 class PatternFormatterHandler
 {
   public:
     PatternFormatterHandler()
     {
         // Set default pattern and colors
-        _formatter = new PatternFormatter<
+        _formatter = std::make_unique<PatternFormatter<
             "{color:level}[{time:HMSus}] ({level}) "
-            "({file:nameonly}:{line}) {message}{color:reset}">{};
-        _colors = new ColorConfig{};
-    }
-
-    ~PatternFormatterHandler()
-    {
-        PatternFormatterBase* pending = _pending_new_formatter.exchange(
-            nullptr, std::memory_order_acq_rel);
-        if (pending != nullptr)
-            delete pending;
-
-        if (_formatter != nullptr)
-            delete _formatter;
+            "({file:nameonly}:{line}) {message}{color:reset}">>();
+        _colors = std::make_unique<ColorConfig>();
     }
 
     std::string format(const MessageData& data, bool use_colors)
@@ -613,55 +604,19 @@ class PatternFormatterHandler
         return _formatter->format(data, *_colors, use_colors);
     }
 
-    // Can be called by any thread
-    void queue_new_pattern_formatter(PatternFormatterBase* formatter)
+    void set_new_pattern_formatter(
+        std::unique_ptr<const PatternFormatterBase> formatter)
     {
-        if (formatter == nullptr)
-            return;
-        PatternFormatterBase* prev = _pending_new_formatter.exchange(
-            formatter, std::memory_order_acq_rel);
-        if (prev != nullptr)
-            delete prev;
+        _formatter = std::move(formatter);
     }
 
-    // Can be called by any thread
-    void queue_new_colors(const ColorConfig& colors)
+    void set_new_colors(std::unique_ptr<const ColorConfig> colors)
     {
-        ColorConfig* prev = _pending_new_colors.exchange(
-            new ColorConfig{ colors }, std::memory_order_acq_rel);
-        if (prev != nullptr)
-            delete prev;
-    }
-
-    // Should only be called by backend
-    void poll_for_pending_formatter_switch()
-    {
-        PatternFormatterBase* new_formatter = _pending_new_formatter.exchange(
-            nullptr, std::memory_order_acq_rel);
-        if (new_formatter != nullptr)
-        {
-            delete _formatter;
-            _formatter = new_formatter;
-        }
-    }
-
-    // Should only be called by backend
-    void poll_for_pending_color_switch()
-    {
-        ColorConfig* new_colors
-            = _pending_new_colors.exchange(nullptr, std::memory_order_acq_rel);
-        if (new_colors != nullptr)
-        {
-            delete _colors;
-            _colors = new_colors;
-        }
+        _colors = std::move(colors);
     }
 
   private:
-    PatternFormatterBase* _formatter;
-    std::atomic<PatternFormatterBase*> _pending_new_formatter = nullptr;
-
-    ColorConfig* _colors;
-    std::atomic<ColorConfig*> _pending_new_colors = nullptr;
+    std::unique_ptr<const PatternFormatterBase> _formatter;
+    std::unique_ptr<const ColorConfig> _colors;
 };
 }

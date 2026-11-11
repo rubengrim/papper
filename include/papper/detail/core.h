@@ -29,6 +29,59 @@ inline size_t queue_size = 1048576; // 1Mb
 
 }
 
+enum BackendSwitchRequestType
+{
+    Sink,
+    Pattern,
+    Color,
+};
+
+struct SinkSwitch
+{
+    FILE* file;
+    int buffering_mode;
+    size_t buffer_size;
+};
+
+struct PatternSwitch
+{
+    const PatternFormatterBase* formatter;
+};
+
+struct ColorSwitch
+{
+    const ColorConfig* colors;
+};
+
+union BackendSwitchRequest
+{
+    SinkSwitch sink_switch;
+    PatternSwitch pattern_switch;
+    ColorSwitch color_switch;
+};
+
+struct CallSiteStaticData
+{
+    LogLevel level;
+    const char* fmt_str = "";
+    std::string (*decoding_fn)(const char*, const std::byte*&);
+    std::source_location location;
+};
+
+struct LogEventHeader
+{
+    const CallSiteStaticData* static_data;
+    const char* thread_name;
+    uint64_t timestamp;
+    size_t payload_size;
+};
+
+// Check that the header isn't padded, since it's encoded field by field into
+// the buffer, but decoded as a whole
+static_assert(sizeof(LogEventHeader)
+              == sizeof(CallSiteStaticData*) + sizeof(const char*)
+                     + sizeof(uint64_t) + sizeof(size_t));
+
 template <typename... Args>
 std::string decode_and_format(const char* fmt_str, const std::byte*& args_data)
 {
@@ -60,28 +113,6 @@ struct DecodingFunction
 template <typename... Args>
 DecodingFunction<std::remove_cvref_t<Args>...>
 get_decoding_function(Args&&...);
-
-struct CallSiteStaticData
-{
-    LogLevel level;
-    const char* fmt_str = "";
-    std::string (*decoding_fn)(const char*, const std::byte*&);
-    std::source_location location;
-};
-
-struct LogEventHeader
-{
-    const CallSiteStaticData* static_data;
-    const char* thread_name;
-    uint64_t timestamp;
-    size_t payload_size;
-};
-
-// // push_log_event() encodes the header field by field, so the struct must
-// // have no padding for decoding it as a whole to work
-// static_assert(sizeof(LogEventHeader)
-//               == sizeof(CallSiteStaticData*) + sizeof(const char*)
-//                      + sizeof(uint64_t) + sizeof(size_t));
 
 class ThreadContext
 {
@@ -170,25 +201,9 @@ class Backend
         }
     }
 
-    void queue_new_sink(FILE* file, const int buffering_mode,
-                        const size_t buffer_size)
-    {
-        _sink.queue_new_sink(file, buffering_mode, buffer_size);
-    }
-
-    void queue_new_pattern_formatter(PatternFormatterBase* formatter)
-    {
-        _sink.queue_new_pattern_formatter(formatter);
-    }
-
     void set_colors_enabled(bool enabled)
     {
         _sink.set_colors_enabled(enabled);
-    }
-
-    void queue_new_colors(const ColorConfig& colors)
-    {
-        _sink.queue_new_colors(colors);
     }
 
     void set_new_minimum_log_level(const LogLevel new_level)
@@ -233,12 +248,54 @@ class Backend
         delete node;
     }
 
+    void read_and_process_switch_request(const std::byte* buffer)
+    {
+        BackendSwitchRequestType type;
+        Codec<BackendSwitchRequestType>::decode(buffer, type);
+
+        BackendSwitchRequest req;
+        Codec<BackendSwitchRequest>::decode(buffer, req);
+
+        switch (type)
+        {
+        case BackendSwitchRequestType::Sink: {
+            const SinkSwitch sink_switch = req.sink_switch;
+            _sink.set_new_sink(sink_switch.file,
+                               sink_switch.buffering_mode,
+                               sink_switch.buffer_size);
+            return;
+        }
+        case BackendSwitchRequestType::Pattern: {
+            std::unique_ptr<const PatternFormatterBase> formatter{
+                req.pattern_switch.formatter
+            };
+            _sink.set_new_pattern_formatter(std::move(formatter));
+            return;
+        }
+        case BackendSwitchRequestType::Color: {
+            std::unique_ptr<const ColorConfig> colors{
+                req.color_switch.colors
+            };
+            _sink.set_new_colors(std::move(colors));
+            return;
+        }
+        }
+    }
+
     // Reads and processes one single event from the buffer.
     // Returns the number of bytes that were read
     size_t read_and_process_single_event(const std::byte* buffer)
     {
         LogEventHeader header;
         Codec<LogEventHeader>::decode(buffer, header);
+
+        // nullptr means the event is a switch request
+        if (header.static_data == nullptr)
+        {
+            read_and_process_switch_request(buffer);
+            return sizeof(LogEventHeader) + sizeof(BackendSwitchRequestType)
+                   + sizeof(BackendSwitchRequest);
+        }
 
         const size_t total_event_size
             = sizeof(LogEventHeader) + header.payload_size;
@@ -322,7 +379,7 @@ class Backend
             double last_utc_offset_resync = 0;
             double last_system_clock_resync = 0;
 
-            auto try_resync_clock = [&]() {
+            auto poll_clock_resync = [&]() {
                 double now = _clock.read_timestamp_ns();
                 if (now - last_utc_offset_resync
                     > resync_utc_offset_interval_ns)
@@ -342,11 +399,7 @@ class Backend
 
             while (_running.load(std::memory_order_acquire))
             {
-                _sink.poll_for_pending_sink_switch();
-                _sink.poll_for_pending_formatter_switch();
-                _sink.poll_for_pending_color_switch();
-
-                try_resync_clock();
+                poll_clock_resync();
 
                 if (poll_threads())
                 {
@@ -367,7 +420,7 @@ class Backend
             // deleted
             while (_head.load(std::memory_order_acquire) != nullptr)
             {
-                try_resync_clock();
+                poll_clock_resync();
                 poll_threads();
             }
         });
@@ -413,24 +466,66 @@ class ThreadContextHandler
     ThreadContext* _context;
 };
 
-inline std::pair<const char*, Queue*>
+inline std::pair<Queue*, const char*>
 get_or_create_thread_queue(std::string_view thread_name = "",
                            const size_t queue_size = defaults::queue_size)
 {
     static thread_local ThreadContextHandler context_handler{ thread_name,
                                                               queue_size };
-    return { context_handler.get_name(), &context_handler.get_queue() };
+    return { &context_handler.get_queue(), context_handler.get_name() };
 }
 
-template <typename... Args>
-void push_log_event(const CallSiteStaticData* static_data, Args&&... args)
+inline void push_backend_switch_request(const BackendSwitchRequestType type,
+                                        const BackendSwitchRequest& req)
 {
-    static thread_local constinit std::pair<const char*, Queue*> t{};
-    if (t.second == nullptr) [[unlikely]]
+    // constinit makes it so that thread isn't checked for being initialized
+    // every call
+    static thread_local constinit std::pair<Queue*, const char*> thread{};
+    if (thread.first == nullptr) [[unlikely]]
     {
-        t = get_or_create_thread_queue();
+        thread = get_or_create_thread_queue();
     }
-    auto& [thread_name, q] = t;
+    Queue* q = thread.first;
+
+    const size_t write_size = sizeof(LogEventHeader)
+                              + sizeof(BackendSwitchRequestType)
+                              + sizeof(BackendSwitchRequest);
+
+    std::byte* buffer = nullptr;
+    Queue::WriteReservation write = Queue::WriteReservation{};
+    // Block if the queue is full and retry until we have our write block
+    while (buffer == nullptr)
+    {
+        write = q->reserve_write(write_size);
+        buffer = write.buffer;
+    }
+
+    // Static data being nullptr signals that this is not a log event
+    Codec<const CallSiteStaticData*>::encode(buffer, nullptr);
+    Codec<const char*>::encode(buffer, "");
+    Codec<uint64_t>::encode(buffer, 0);
+    Codec<size_t>::encode(buffer, 0);
+
+    // Push the arguments, which first is the type of the request, and second
+    // the union containing the actual data for the request
+    Codec<BackendSwitchRequestType>::encode(buffer, type);
+    Codec<BackendSwitchRequest>::encode(buffer, req);
+
+    q->commit_write(write.new_write_pos);
+};
+
+template <typename... Args>
+inline void push_log_event(const CallSiteStaticData* static_data,
+                           Args&&... args)
+{
+    // constinit makes it so that thread isn't checked for being initialized
+    // every call
+    static thread_local constinit std::pair<Queue*, const char*> thread{};
+    if (thread.first == nullptr) [[unlikely]]
+    {
+        thread = get_or_create_thread_queue();
+    }
+    auto& [q, thread_name] = thread;
 
     size_t total_args_size = 0;
     if constexpr (sizeof...(args) > 0)

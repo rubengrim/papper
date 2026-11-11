@@ -16,10 +16,15 @@ enum class FlushOn
 inline void set_sink(FILE* file, const FlushOn flush_on = FlushOn::LineEnd,
                      const size_t buffer_size = BUFSIZ)
 {
-    detail::Backend::get_or_create_instance().queue_new_sink(
-        file, (int)flush_on, buffer_size);
+    detail::BackendSwitchRequest req;
+    req.sink_switch = detail::SinkSwitch{ .file = file,
+                                          .buffering_mode = (int)flush_on,
+                                          .buffer_size = buffer_size };
+    detail::push_backend_switch_request(detail::BackendSwitchRequestType::Sink,
+                                        req);
 }
 
+// Returns 0 on success, errno if file opening failed
 [[nodiscard]] inline int set_sink(const char* filename,
                                   const bool truncate = false,
                                   const FlushOn flush_on = FlushOn::LineEnd,
@@ -48,7 +53,10 @@ inline void disable_colors()
 
 inline void set_colors(const ColorConfig& colors)
 {
-    detail::Backend::get_or_create_instance().queue_new_colors(colors);
+    detail::BackendSwitchRequest req;
+    req.color_switch = detail::ColorSwitch{ new ColorConfig{ colors } };
+    detail::push_backend_switch_request(
+        detail::BackendSwitchRequestType::Color, req);
 }
 
 // Sets the default queue size for threads created in the future.
@@ -128,10 +136,12 @@ inline void set_level(const LogLevel level)
 
 #define PAPPER_SET_PATTERN(pattern)                                            \
 {                                                                              \
-    papper::detail::PatternFormatterBase* fmt                                  \
+    const papper::detail::PatternFormatterBase* fmt                            \
         = new papper::detail::PatternFormatter<pattern>;                       \
-    papper::detail::Backend::get_or_create_instance()                          \
-        .queue_new_pattern_formatter(fmt);                                     \
+    papper::detail::BackendSwitchRequest req;                                  \
+    req.pattern_switch = papper::detail::PatternSwitch{ fmt };                 \
+    papper::detail::push_backend_switch_request(                               \
+        papper::detail::BackendSwitchRequestType::Pattern, req);               \
 }
 
 // Use this version if you need more fields, or if the expanded internal format
@@ -140,8 +150,10 @@ inline void set_level(const LogLevel level)
 {                                                                              \
     papper::detail::PatternFormatterBase* fmt = new papper::detail::           \
         PatternFormatter<pattern, max_fields, max_expanded_fmt_str_len>;       \
-    papper::detail::Backend::get_or_create_instance()                          \
-        .queue_new_pattern_formatter(fmt);                                     \
+    papper::detail::BackendSwitchRequest req;                                  \
+    req.pattern_switch = papper::detail::PatternSwitch{ fmt };                 \
+    papper::detail::push_backend_switch_request(                               \
+        papper::detail::BackendSwitchRequestType::Pattern, req);               \
 }
 
 // clang-format on
