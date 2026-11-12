@@ -64,6 +64,11 @@ class SinkHandler
         _colors_enabled = enabled;
     }
 
+    void flush()
+    {
+        fflush(_sink);
+    }
+
   private:
     void close_file(FILE* file)
     {

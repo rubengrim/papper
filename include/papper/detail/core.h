@@ -2,12 +2,16 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <source_location>
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 
 #include <fmt/format.h>
@@ -29,35 +33,43 @@ inline size_t queue_size = 1048576; // 1Mb
 
 }
 
-enum BackendSwitchRequestType
+// TODO: Rename to something like "control event"
+enum ControlEventType
 {
     Sink,
     Pattern,
     Color,
+    ColorEnable,
 };
 
-struct SinkSwitch
+struct NewSinkControlEvent
 {
     FILE* file;
     int buffering_mode;
     size_t buffer_size;
 };
 
-struct PatternSwitch
+struct NewPatternControlEvent
 {
     const PatternFormatterBase* formatter;
 };
 
-struct ColorSwitch
+struct NewColorControlEvent
 {
     const ColorConfig* colors;
 };
 
-union BackendSwitchRequest
+struct ColorEnableControlEvent
 {
-    SinkSwitch sink_switch;
-    PatternSwitch pattern_switch;
-    ColorSwitch color_switch;
+    bool enabled;
+};
+
+union ControlEvent
+{
+    NewSinkControlEvent new_sink;
+    NewPatternControlEvent new_pattern;
+    NewColorControlEvent new_colors;
+    ColorEnableControlEvent colors_enabled;
 };
 
 struct CallSiteStaticData
@@ -117,18 +129,12 @@ get_decoding_function(Args&&...);
 class ThreadContext
 {
   public:
-    ThreadContext(std::string_view thread_name, const size_t queue_size)
+    ThreadContext(const size_t queue_size)
         : _q{ queue_size }, _is_alive{ true }
     {
-        if (thread_name == "")
-        {
-            static std::atomic<int> unnamed_thread_counter{ 0 };
-            _name = "thread_" + std::to_string(++unnamed_thread_counter);
-        }
-        else
-        {
-            _name = thread_name;
-        }
+        static std::atomic<size_t> thread_counter = 0;
+        _id = ++thread_counter;
+        _names.emplace_back("thread_" + std::to_string(_id));
     }
 
     Queue& get_queue()
@@ -136,12 +142,22 @@ class ThreadContext
         return _q;
     }
 
-    const char* get_name()
+    size_t get_id() const
     {
-        return _name.c_str();
+        return _id;
     }
 
-    bool thread_is_alive()
+    const char* get_name() const
+    {
+        return _names.back().c_str();
+    }
+
+    void set_name(std::string_view name)
+    {
+        _names.emplace_back(name);
+    }
+
+    bool thread_is_alive() const
     {
         return _is_alive.load(std::memory_order_acquire);
     }
@@ -152,7 +168,10 @@ class ThreadContext
     }
 
   private:
-    std::string _name;
+    size_t _id;
+    // Store history of thread names in case the name is changed while a log
+    // event is still in the queue with a pointer to the old name
+    std::deque<std::string> _names;
     Queue _q;
     std::atomic<bool> _is_alive;
 };
@@ -168,8 +187,8 @@ class Backend
   public:
     static Backend& get_or_create_instance()
     {
-        static Backend instance{};
-        return instance;
+        static Backend* instance = new Backend{};
+        return *instance;
     }
 
     Backend(const Backend&) = delete;
@@ -177,19 +196,24 @@ class Backend
     Backend& operator=(const Backend&) = delete;
     Backend& operator=(Backend&&) = delete;
 
-    ~Backend()
+    enum class State
     {
-        _running.store(false, std::memory_order_release);
+        NotStarted,
+        Running,
+        ShuttingDown,
+        Shutdown,
+    };
 
-        if (_backend_thread.joinable())
-        {
-            _backend_thread.join();
-        }
+    State get_backend_state() const
+    {
+        return _state.load(std::memory_order_acquire);
     }
 
-  public:
     void register_thread(ThreadContext* context)
     {
+        // if (_running.load(std::memory_order_acquire))
+        //     return;
+
         ThreadContextNode* node = new ThreadContextNode;
         node->context = context;
         node->next = _head.load(std::memory_order_relaxed);
@@ -201,18 +225,53 @@ class Backend
         }
     }
 
-    void set_colors_enabled(bool enabled)
+    void shutdown()
     {
-        _sink.set_colors_enabled(enabled);
+        if (get_backend_state() == State::Running)
+        {
+            set_backend_state(State::ShuttingDown);
+            if (_backend_thread.joinable())
+            {
+                _backend_thread.join();
+            }
+
+            drain_pre_shutdown_events();
+            _sink.flush();
+
+            set_backend_state(State::Shutdown);
+        }
+    }
+
+    bool is_shutdown_or_shutting_down() const
+    {
+        State state = get_backend_state();
+        return state == State::Shutdown || state == State::ShuttingDown;
     }
 
     void set_new_minimum_log_level(const LogLevel new_level)
     {
-        min_log_level.store(new_level, std::memory_order_release);
+        _min_log_level.store(new_level, std::memory_order_release);
     }
 
   private:
-    // May ONLY be called by the backend thread
+    void set_backend_state(State state)
+    {
+        _state.store(state, std::memory_order_release);
+    }
+
+    size_t get_num_registered_threads() const
+    {
+        size_t count = 0;
+        ThreadContextNode* node = _head.load(std::memory_order_acquire);
+        while (node->next != nullptr)
+        {
+            count++;
+            node = node->next;
+        }
+
+        return count;
+    }
+
     void remove_and_delete_node(ThreadContextNode* node)
     {
         if (node == nullptr)
@@ -248,36 +307,39 @@ class Backend
         delete node;
     }
 
-    void read_and_process_switch_request(const std::byte* buffer)
+    void read_and_process_control_event(const std::byte* buffer)
     {
-        BackendSwitchRequestType type;
-        Codec<BackendSwitchRequestType>::decode(buffer, type);
+        ControlEventType type;
+        Codec<ControlEventType>::decode(buffer, type);
 
-        BackendSwitchRequest req;
-        Codec<BackendSwitchRequest>::decode(buffer, req);
+        ControlEvent event;
+        Codec<ControlEvent>::decode(buffer, event);
 
         switch (type)
         {
-        case BackendSwitchRequestType::Sink: {
-            const SinkSwitch sink_switch = req.sink_switch;
+        case ControlEventType::Sink: {
+            const NewSinkControlEvent sink_switch = event.new_sink;
             _sink.set_new_sink(sink_switch.file,
                                sink_switch.buffering_mode,
                                sink_switch.buffer_size);
             return;
         }
-        case BackendSwitchRequestType::Pattern: {
+        case ControlEventType::Pattern: {
             std::unique_ptr<const PatternFormatterBase> formatter{
-                req.pattern_switch.formatter
+                event.new_pattern.formatter
             };
             _sink.set_new_pattern_formatter(std::move(formatter));
             return;
         }
-        case BackendSwitchRequestType::Color: {
+        case ControlEventType::Color: {
             std::unique_ptr<const ColorConfig> colors{
-                req.color_switch.colors
+                event.new_colors.colors
             };
             _sink.set_new_colors(std::move(colors));
             return;
+        }
+        case ControlEventType::ColorEnable: {
+            _sink.set_colors_enabled(event.colors_enabled.enabled);
         }
         }
     }
@@ -292,9 +354,9 @@ class Backend
         // nullptr means the event is a switch request
         if (header.static_data == nullptr)
         {
-            read_and_process_switch_request(buffer);
-            return sizeof(LogEventHeader) + sizeof(BackendSwitchRequestType)
-                   + sizeof(BackendSwitchRequest);
+            read_and_process_control_event(buffer);
+            return sizeof(LogEventHeader) + sizeof(ControlEventType)
+                   + sizeof(ControlEvent);
         }
 
         const size_t total_event_size
@@ -304,7 +366,7 @@ class Backend
             header.static_data->fmt_str, buffer);
 
         if (header.static_data->level
-            < min_log_level.load(std::memory_order_acquire))
+            < _min_log_level.load(std::memory_order_acquire))
         {
             return total_event_size; // Drop the event if too low level
         }
@@ -328,7 +390,7 @@ class Backend
     // were any
     bool poll_threads()
     {
-        bool b_were_events_to_process = false;
+        bool were_events_to_process = false;
 
         ThreadContextNode* node = _head.load(std::memory_order_acquire);
         while (node != nullptr)
@@ -339,10 +401,10 @@ class Backend
             Queue::ReadReservation read = q.reserve_read();
             if (read.buffer != nullptr)
             {
-                const size_t size_read
+                const size_t bytes_read
                     = read_and_process_single_event(read.buffer);
-                q.commit_read(read.current_read_pos + size_read);
-                b_were_events_to_process = true;
+                q.commit_read(read.current_read_pos + bytes_read);
+                were_events_to_process = true;
             }
             else if (!node->context->thread_is_alive())
             {
@@ -355,19 +417,70 @@ class Backend
             node = next;
         }
 
-        return b_were_events_to_process;
+        return were_events_to_process;
+    }
+
+    // Drains every event that was send up to when shutdown was called
+    void drain_pre_shutdown_events()
+    {
+        // Get the current available bytes to read from each thread, so we
+        // don't read more than this and risk blocking forever if a background
+        // thread has detached and keeps pushing events
+        std::unordered_map<size_t, size_t> bytes_to_read;
+        ThreadContextNode* node = _head.load(std::memory_order_acquire);
+        while (node != nullptr)
+        {
+            bytes_to_read[node->context->get_id()]
+                = node->context->get_queue().n_available_bytes();
+            node = node->next;
+        }
+
+        while (true)
+        {
+            bool were_events_to_process = false;
+
+            node = _head.load(std::memory_order_acquire);
+            while (node != nullptr)
+            {
+                const size_t thread_id = node->context->get_id();
+                // Check if there's more to read so we only read pre-shutdown
+                // events
+                if (bytes_to_read[thread_id] > 0)
+                {
+                    Queue& q = node->context->get_queue();
+
+                    Queue::ReadReservation read = q.reserve_read();
+                    if (read.buffer != nullptr)
+                    {
+                        const size_t bytes_read
+                            = read_and_process_single_event(read.buffer);
+                        q.commit_read(read.current_read_pos + bytes_read);
+
+                        bytes_to_read[thread_id] -= bytes_read;
+                        were_events_to_process = true;
+                    }
+                }
+
+                node = node->next;
+            }
+
+            if (!were_events_to_process)
+            {
+                break;
+            }
+        }
     }
 
     Backend()
     {
         if (!_clock.init())
         {
-            throw std::runtime_error("CPU does not have an invariant TSC. "
-                                     "A fallback is no implemented, so papper "
-                                     "can't run on this machine yet.");
+            throw std::runtime_error(
+                "CPU does not have an invariant TSC. "
+                "A fallback is not implemented, so papper "
+                "can't run on this machine yet.");
         }
 
-        _running.store(true, std::memory_order_relaxed);
         _backend_thread = std::thread([this]() {
             uint32_t backoff_us = 1;
             // TODO: Let user to change this
@@ -397,7 +510,8 @@ class Backend
                 }
             };
 
-            while (_running.load(std::memory_order_acquire))
+            set_backend_state(State::Running);
+            while (get_backend_state() == State::Running)
             {
                 poll_clock_resync();
 
@@ -415,22 +529,17 @@ class Backend
                     backoff_us = std::min(backoff_us * 2, max_backoff_us);
                 }
             }
-
-            // Poll remaining events until all thread queues are emptied and
-            // deleted
-            while (_head.load(std::memory_order_acquire) != nullptr)
-            {
-                poll_clock_resync();
-                poll_threads();
-            }
         });
+
+        std::atexit([]() { get_or_create_instance().shutdown(); });
     }
 
   private:
-    std::atomic<bool> _running = false;
+    std::atomic<State> _state = State::NotStarted;
+
     std::atomic<ThreadContextNode*> _head = nullptr;
     SinkHandler _sink;
-    std::atomic<LogLevel> min_log_level = LogLevel::Trace;
+    std::atomic<LogLevel> _min_log_level = LogLevel::Trace;
     Clock _clock;
     std::thread _backend_thread;
 };
@@ -438,66 +547,101 @@ class Backend
 class ThreadContextHandler
 {
   public:
-    ThreadContextHandler(std::string_view thread_name, const size_t queue_size)
-        : _context{ new ThreadContext{ thread_name, queue_size } }
-    {
-        Backend::get_or_create_instance().register_thread(_context);
-    }
-
     ~ThreadContextHandler()
     {
         // Don't delete the context here, just mark it as dead and
         // let the background thread delete it when all remaining queue events
         // have been read
         _context->kill();
+        // Set it to a dummy marker so the frontend knows not to
+        // send any more messages through it
+        _context = reinterpret_cast<ThreadContext*>(
+            ThreadContextHandler::_dead_context_marker);
     }
 
-    Queue& get_queue()
+    static ThreadContext* create_context(const size_t queue_size
+                                         = defaults::queue_size)
     {
-        return _context->get_queue();
+        // Init the handler as thread_local so its destructor runs when the
+        // frontend thread dies
+        static thread_local ThreadContextHandler handler{ queue_size };
+        return _context;
     }
 
-    const char* get_name()
+    static ThreadContext* get_context()
     {
-        return _context->get_name();
+        return _context;
     }
 
   private:
-    ThreadContext* _context;
+    ThreadContextHandler(const size_t queue_size)
+    {
+        _context = new ThreadContext{ queue_size };
+        Backend::get_or_create_instance().register_thread(_context);
+    }
+
+  public:
+    static constexpr std::uintptr_t _dead_context_marker
+        = alignof(ThreadContext);
+
+  private:
+    inline static thread_local constinit ThreadContext* _context = nullptr;
 };
 
-inline std::pair<Queue*, const char*>
-get_or_create_thread_queue(std::string_view thread_name = "",
-                           const size_t queue_size = defaults::queue_size)
+inline ThreadContext* get_or_init_thread_context(const size_t queue_size
+                                                 = defaults::queue_size)
 {
-    static thread_local ThreadContextHandler context_handler{ thread_name,
-                                                              queue_size };
-    return { &context_handler.get_queue(), context_handler.get_name() };
+    ThreadContext* context = ThreadContextHandler::get_context();
+    if (context == nullptr)
+    {
+        context = ThreadContextHandler::create_context(queue_size);
+    }
+    else if (reinterpret_cast<std::uintptr_t>(context)
+             == ThreadContextHandler::_dead_context_marker) [[unlikely]]
+    {
+        return nullptr;
+    }
+
+    return context;
 }
 
-inline void push_backend_switch_request(const BackendSwitchRequestType type,
-                                        const BackendSwitchRequest& req)
+// Pushes a control event for switching sink, pattern or color config to the
+// thread queue
+inline void push_control_event(const ControlEventType type,
+                               const ControlEvent& req)
 {
-    // constinit makes it so that thread isn't checked for being initialized
-    // every call
-    static thread_local constinit std::pair<Queue*, const char*> thread{};
-    if (thread.first == nullptr) [[unlikely]]
+    // Get the thread context, create it if it hasn't been initialized, and
+    // drop the message if it's been marked dead
+    ThreadContext* context = ThreadContextHandler::get_context();
+    if (context == nullptr) [[unlikely]]
     {
-        thread = get_or_create_thread_queue();
+        context = ThreadContextHandler::create_context();
     }
-    Queue* q = thread.first;
+    else if (reinterpret_cast<std::uintptr_t>(context)
+             == ThreadContextHandler::_dead_context_marker) [[unlikely]]
+    {
+        return;
+    }
 
-    const size_t write_size = sizeof(LogEventHeader)
-                              + sizeof(BackendSwitchRequestType)
-                              + sizeof(BackendSwitchRequest);
+    Queue& q = context->get_queue();
+
+    const size_t write_size = sizeof(LogEventHeader) + sizeof(ControlEventType)
+                              + sizeof(ControlEvent);
 
     std::byte* buffer = nullptr;
     Queue::WriteReservation write = Queue::WriteReservation{};
     // Block if the queue is full and retry until we have our write block
     while (buffer == nullptr)
     {
-        write = q->reserve_write(write_size);
+        write = q.reserve_write(write_size);
         buffer = write.buffer;
+
+        // Check if backend is shut down or we'll spin forever
+        if (Backend::get_or_create_instance().is_shutdown_or_shutting_down())
+            [[unlikely]]
+        {
+            return;
+        }
     }
 
     // Static data being nullptr signals that this is not a log event
@@ -506,26 +650,31 @@ inline void push_backend_switch_request(const BackendSwitchRequestType type,
     Codec<uint64_t>::encode(buffer, 0);
     Codec<size_t>::encode(buffer, 0);
 
-    // Push the arguments, which first is the type of the request, and second
-    // the union containing the actual data for the request
-    Codec<BackendSwitchRequestType>::encode(buffer, type);
-    Codec<BackendSwitchRequest>::encode(buffer, req);
+    Codec<ControlEventType>::encode(buffer, type);
+    Codec<ControlEvent>::encode(buffer, req);
 
-    q->commit_write(write.new_write_pos);
+    q.commit_write(write.new_write_pos);
 };
 
 template <typename... Args>
 inline void push_log_event(const CallSiteStaticData* static_data,
                            Args&&... args)
 {
-    // constinit makes it so that thread isn't checked for being initialized
-    // every call
-    static thread_local constinit std::pair<Queue*, const char*> thread{};
-    if (thread.first == nullptr) [[unlikely]]
+    // Get the thread context, create it if it hasn't been initialized, and
+    // drop the message if it's been marked dead
+    ThreadContext* context = ThreadContextHandler::get_context();
+    if (context == nullptr) [[unlikely]]
     {
-        thread = get_or_create_thread_queue();
+        context = ThreadContextHandler::create_context();
     }
-    auto& [q, thread_name] = thread;
+    else if (reinterpret_cast<std::uintptr_t>(context)
+             == ThreadContextHandler::_dead_context_marker) [[unlikely]]
+    {
+        return;
+    }
+
+    Queue& q = context->get_queue();
+    const char* thread_name = context->get_name();
 
     size_t total_args_size = 0;
     if constexpr (sizeof...(args) > 0)
@@ -539,7 +688,7 @@ inline void push_log_event(const CallSiteStaticData* static_data,
     // chrono, so must figure out how to handle that
     const uint64_t timestamp = read_tsc();
 
-    Queue::WriteReservation write = q->reserve_write(header_plus_args_size);
+    Queue::WriteReservation write = q.reserve_write(header_plus_args_size);
     std::byte* buffer = write.buffer;
     if (buffer == nullptr)
         return; // Not enough queue space, drop the event
@@ -551,7 +700,7 @@ inline void push_log_event(const CallSiteStaticData* static_data,
     // Encode args
     ((Codec<std::remove_cvref_t<Args>>::encode(buffer, args)), ...);
 
-    q->commit_write(write.new_write_pos);
+    q.commit_write(write.new_write_pos);
 }
 
 } // end namespace papper::detail

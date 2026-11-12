@@ -89,11 +89,13 @@ int main()
     // }
     // perf_command("disable\n", 8);
 
+    // PAPPER_SET_PATTERN("{time:HMS} {thread} {message}");
     PAPPER_DEBUG("i terminal");
-    int _ = papper::set_sink("log.txt", true);
     PAPPER_DEBUG("i fil");
-    papper::init_thread("tråd55");
+    papper::init_thread();
+    papper::set_thread_name("tråd1324");
 
+    papper::disable_colors();
     papper::set_sink(stdout);
     PAPPER_TRACE("vit trace");
     PAPPER_DEBUG("blå debug");

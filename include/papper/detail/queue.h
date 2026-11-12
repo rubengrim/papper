@@ -90,7 +90,7 @@ class Queue
         _atomic_r.store(_r, std::memory_order_release);
     }
 
-    bool is_empty()
+    bool is_empty() noexcept
     {
         if (_cached_w <= _r)
         {
@@ -102,6 +102,12 @@ class Queue
         {
             return false;
         }
+    }
+
+    // Can only be called by consumer
+    size_t n_available_bytes() const noexcept
+    {
+        return _atomic_w.load(std::memory_order_acquire) - _r;
     }
 
   private:

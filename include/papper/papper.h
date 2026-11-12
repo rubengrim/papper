@@ -3,6 +3,7 @@
 // IWYU pragma: always_keep
 
 #include "detail/core.h"
+#include <string_view>
 
 namespace papper
 {
@@ -16,12 +17,12 @@ enum class FlushOn
 inline void set_sink(FILE* file, const FlushOn flush_on = FlushOn::LineEnd,
                      const size_t buffer_size = BUFSIZ)
 {
-    detail::BackendSwitchRequest req;
-    req.sink_switch = detail::SinkSwitch{ .file = file,
-                                          .buffering_mode = (int)flush_on,
-                                          .buffer_size = buffer_size };
-    detail::push_backend_switch_request(detail::BackendSwitchRequestType::Sink,
-                                        req);
+    detail::ControlEvent req;
+    req.new_sink
+        = detail::NewSinkControlEvent{ .file = file,
+                                       .buffering_mode = (int)flush_on,
+                                       .buffer_size = buffer_size };
+    detail::push_control_event(detail::ControlEventType::Sink, req);
 }
 
 // Returns 0 on success, errno if file opening failed
@@ -42,21 +43,25 @@ inline void set_sink(FILE* file, const FlushOn flush_on = FlushOn::LineEnd,
 // Will enable colored output for sinks that support it
 inline void enable_colors()
 {
-    detail::Backend::get_or_create_instance().set_colors_enabled(true);
+    detail::ControlEvent event;
+    event.colors_enabled = detail::ColorEnableControlEvent{ .enabled = true };
+    detail::push_control_event(detail::ControlEventType::ColorEnable, event);
 }
 
 // Disables colored output for all sinks
 inline void disable_colors()
 {
-    detail::Backend::get_or_create_instance().set_colors_enabled(false);
+    detail::ControlEvent event;
+    event.colors_enabled = detail::ColorEnableControlEvent{ .enabled = false };
+    detail::push_control_event(detail::ControlEventType::ColorEnable, event);
 }
 
 inline void set_colors(const ColorConfig& colors)
 {
-    detail::BackendSwitchRequest req;
-    req.color_switch = detail::ColorSwitch{ new ColorConfig{ colors } };
-    detail::push_backend_switch_request(
-        detail::BackendSwitchRequestType::Color, req);
+    detail::ControlEvent event;
+    event.new_colors
+        = detail::NewColorControlEvent{ new ColorConfig{ colors } };
+    detail::push_control_event(detail::ControlEventType::Color, event);
 }
 
 // Sets the default queue size for threads created in the future.
@@ -69,11 +74,18 @@ inline void set_default_queue_size(const size_t queue_size)
 
 // Initializes the backend and initializes and allocates memory for the
 // thread's queue
-// Allows setting a thread name
-inline void init_thread(std::string_view thread_name = "",
-                        const size_t queue_size = detail::defaults::queue_size)
+inline void init_thread(const size_t queue_size = detail::defaults::queue_size)
 {
-    detail::get_or_create_thread_queue(thread_name, queue_size);
+    detail::get_or_init_thread_context(queue_size);
+}
+
+inline void set_thread_name(std::string_view name)
+{
+    detail::ThreadContext* context = detail::get_or_init_thread_context();
+    if (context != nullptr)
+    {
+        context->set_name(name);
+    }
 }
 
 inline void set_level(const LogLevel level)
@@ -138,10 +150,10 @@ inline void set_level(const LogLevel level)
 {                                                                              \
     const papper::detail::PatternFormatterBase* fmt                            \
         = new papper::detail::PatternFormatter<pattern>;                       \
-    papper::detail::BackendSwitchRequest req;                                  \
-    req.pattern_switch = papper::detail::PatternSwitch{ fmt };                 \
-    papper::detail::push_backend_switch_request(                               \
-        papper::detail::BackendSwitchRequestType::Pattern, req);               \
+    papper::detail::ControlEvent event;                                        \
+    event.new_pattern = papper::detail::NewPatternControlEvent{ fmt };         \
+    papper::detail::push_control_event(                                        \
+        papper::detail::ControlEventType::Pattern, event);                     \
 }
 
 // Use this version if you need more fields, or if the expanded internal format
@@ -150,10 +162,10 @@ inline void set_level(const LogLevel level)
 {                                                                              \
     papper::detail::PatternFormatterBase* fmt = new papper::detail::           \
         PatternFormatter<pattern, max_fields, max_expanded_fmt_str_len>;       \
-    papper::detail::BackendSwitchRequest req;                                  \
-    req.pattern_switch = papper::detail::PatternSwitch{ fmt };                 \
-    papper::detail::push_backend_switch_request(                               \
-        papper::detail::BackendSwitchRequestType::Pattern, req);               \
+    papper::detail::ControlEvent event;                                        \
+    event.new_pattern = papper::detail::NewPatternControlEvent{ fmt };         \
+    papper::detail::push_control_event(                                        \
+        papper::detail::ControlEventType::Pattern, event);                     \
 }
 
 // clang-format on

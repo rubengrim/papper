@@ -11,9 +11,9 @@ bench::Options options;
 bench::Clock::time_point throughput_start;
 
 // papper has no flush call, its backend only finishes writing all queued
-// messages and closes the sink when it is destroyed at exit. This is
+// messages and flushes the sink in its own atexit handler. This is
 // registered with atexit before the backend is created, so it runs after the
-// backend's destructor, i.e. once everything has been written.
+// backend's handler, i.e. once everything has been written.
 void finish()
 {
     if (options.mode == bench::Mode::Throughput)
@@ -50,7 +50,10 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    auto init_thread = [] { papper::init_thread("bench"); };
+    auto init_thread = [] {
+        papper::init_thread();
+        papper::set_thread_name("bench");
+    };
     auto log = [](int i, double d, const std::string& s) {
         PAPPER_INFO("Logging int: {}, double: {:.3f}, string: {}", i, d, s);
     };

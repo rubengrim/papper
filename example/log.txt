@@ -1,1 +1,1 @@
-[09:59:38.261360] (DEBUG) (main.cpp:94) i fil
+21:53:00 tråd1324 i fil

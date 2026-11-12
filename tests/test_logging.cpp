@@ -42,7 +42,7 @@ class LogCapture
                 / ("papper_test_" + std::to_string(getpid()) + "_"
                    + std::to_string(counter++) + ".log");
 
-        papper::init_thread("main");
+        papper::set_thread_name("main");
         REQUIRE(papper::set_sink(_path.c_str(), true) == 0);
 
         _start_marker = sync();
@@ -255,13 +255,35 @@ TEST_CASE("logging: events below the minimum level are dropped")
     CHECK(capture.lines().back() == "TRACE|main|back to trace");
 }
 
+TEST_CASE("logging: renaming a thread only affects later events")
+{
+    set_simple_pattern();
+    LogCapture capture;
+
+    std::thread worker([] {
+        PAPPER_INFO("before");
+        papper::set_thread_name("renamed");
+        PAPPER_INFO("after");
+        papper::set_thread_name("renamed-again-with-a-name-too-long-for-sso");
+        PAPPER_INFO("after again");
+    });
+    worker.join();
+
+    const auto lines = capture.wait_for_lines(3);
+    REQUIRE(lines.size() == 3);
+    CHECK(std::regex_match(lines[0], std::regex{ R"(^INFO\|thread_\d+\|before$)" }));
+    CHECK(lines[1] == "INFO|renamed|after");
+    CHECK(lines[2]
+          == "INFO|renamed-again-with-a-name-too-long-for-sso|after again");
+}
+
 TEST_CASE("logging: thread names")
 {
     set_simple_pattern();
     LogCapture capture;
 
     std::thread named([] {
-        papper::init_thread("named-worker");
+        papper::set_thread_name("named-worker");
         PAPPER_INFO("from named");
     });
     named.join();
@@ -296,7 +318,7 @@ TEST_CASE("logging: many threads, no lost or reordered events")
     for (int t = 0; t < n_threads; ++t)
     {
         threads.emplace_back([t] {
-            papper::init_thread("w" + std::to_string(t));
+            papper::set_thread_name("w" + std::to_string(t));
             for (int i = 0; i < n_per_thread; ++i)
                 PAPPER_INFO("{} {}", i, std::string("payload"));
         });
@@ -340,7 +362,8 @@ TEST_CASE("logging: a full queue drops events without corrupting others")
 
     constexpr int n = 20000;
     std::thread worker([&] {
-        papper::init_thread("tiny", 512);
+        papper::init_thread(512);
+        papper::set_thread_name("tiny");
         for (int i = 0; i < n; ++i)
             PAPPER_INFO(
                 "{} {}", i, std::string("some payload to fill the queue"));
