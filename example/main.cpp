@@ -94,16 +94,18 @@ int main()
     // using namespace papper;
     // using namespace papper::detail;
 
-    PAPPER_SET_PATTERN("{color:red,on_white,blink}{time:HMSns}{color:reset} "
-                       "{thread} {color:level}{message}{color:reset}");
+    // PAPPER_SET_PATTERN(
+    //     "{c:white}[{time:HMSus}]{c:reset} {c:level}{level:<5}{c:reset} "
+    //     "{c:underline}{file}:{line}{c:reset} {message}");
 
-    PAPPER_SET_PATTERN("[{time:HMSus}] {color:level}({level}){color:reset} "
-                       "({file}:{line}) {message}");
-    papper::set_colors(papper::ColorConfig{
-        .error = { papper::ColorCode::red, papper::ColorCode::blink } });
+    // papper::set_colors(papper::ColorConfig{ { papper::ColorCode::white },
+    //                                         { papper::ColorCode::white },
+    //                                         { papper::ColorCode::white },
+    //                                         { papper::ColorCode::white },
+    //                                         { papper::ColorCode::white } });
 
-    WARN("en varning");
-    ERROR("ett error");
+    // WARN("en varning");
+    // ERROR("ett error");
 
     // PAPPER_DEBUG("i terminal");
     // PAPPER_DEBUG("i fil");
@@ -125,11 +127,17 @@ int main()
     // //                    "{message}{color:reset}");
     // PAPPER_WARN("ny pattern");
 
-    // PAPPER_TRACE("msg");
-    // PAPPER_DEBUG("msg");
-    // PAPPER_INFO("msg");
-    // PAPPER_WARN("msg");
-    // PAPPER_ERROR("msg");
+    // papper::enable_colors();
+    // PAPPER_SET_PATTERN("{color:level}{level}{color:reset} {message}");
+
+    PAPPER_WARN("plain");
+
+    papper::disable_colors();
+    PAPPER_TRACE("msg");
+    PAPPER_DEBUG("msg");
+    PAPPER_INFO("msg");
+    PAPPER_WARN("msg");
+    PAPPER_ERROR("msg");
 
     // PAPPER_INFO("hej {}, {}", 1, "hopp");
     // PAPPER_WARN("hej {}, {}", 1, "hopp");

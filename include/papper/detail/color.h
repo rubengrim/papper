@@ -111,7 +111,7 @@ struct ColorConfig
     Color debug{ ColorCode::blue };
     Color info{ ColorCode::white };
     Color warn{ ColorCode::yellow };
-    Color error{ ColorCode::bright_red, ColorCode::on_red };
+    Color error{ ColorCode::red };
 };
 
 }

@@ -69,12 +69,13 @@ inline void set_colors(const ColorConfig& colors)
 // Will NOT reallocate/touch existing thread queues.
 inline void set_default_queue_size(const size_t queue_size)
 {
-    detail::defaults::queue_size = queue_size;
+    detail::globals::default_queue_size = queue_size;
 }
 
 // Initializes the backend and initializes and allocates memory for the
 // thread's queue
-inline void init_thread(const size_t queue_size = detail::defaults::queue_size)
+inline void init_thread(const size_t queue_size
+                        = detail::globals::default_queue_size)
 {
     detail::get_or_init_thread_context(queue_size);
 }

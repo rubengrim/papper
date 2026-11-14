@@ -27,10 +27,10 @@
 namespace papper::detail
 {
 
-namespace defaults
+namespace globals
 {
 
-inline size_t queue_size = 1048576; // 1Mb
+inline std::atomic<size_t> default_queue_size = 1048576; // 1Mb
 
 }
 
@@ -522,7 +522,7 @@ class ThreadContextHandler
     }
 
     static ThreadContext* create_context(const size_t queue_size
-                                         = defaults::queue_size)
+                                         = globals::default_queue_size)
     {
         // Init the handler as thread_local so its destructor runs when the
         // frontend thread dies
@@ -551,7 +551,7 @@ class ThreadContextHandler
 };
 
 inline ThreadContext* get_or_init_thread_context(const size_t queue_size
-                                                 = defaults::queue_size)
+                                                 = globals::default_queue_size)
 {
     ThreadContext* context = ThreadContextHandler::get_context();
     if (context == nullptr)

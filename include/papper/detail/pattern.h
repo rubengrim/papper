@@ -83,11 +83,13 @@ enum class ParsingError
 {
     None,
     UnterminatedBrace,
-    EmptyFieldName,
+    UnmatchedClosingBrace,
+    EmptyField,
     UnknownFieldType,
     InvalidFieldSpec,
+    InvalidFieldSyntax,
     TooManyFields,
-    UnmatchedClosingBrace,
+    ExceedsMaxFmtStrLen,
 };
 
 consteval bool validate_custom_color_spec(std::string_view color_spec)
@@ -103,22 +105,6 @@ consteval bool validate_custom_color_spec(std::string_view color_spec)
     }
 
     return true;
-}
-
-// Parses the color_spec and writes it to the result
-template <typename ParsedPatternT>
-consteval void parse_and_write_custom_color_spec(std::string_view color_spec,
-                                                 ParsedPatternT& result)
-{
-    for (auto name_it : std::views::split(color_spec, ','))
-    {
-        std::string_view name = { name_it.begin(), name_it.end() };
-        std::string_view code = ColorCode::from_name(name);
-        for (auto c : code)
-        {
-            result.fmt_str[result.fmt_str_len++] = c;
-        }
-    }
 }
 
 // Given a type name and spec name, get the corresponding PatternField variant
@@ -224,7 +210,7 @@ get_and_validate_field(const std::string_view field_name,
         }
         return ParsingError::InvalidFieldSpec;
     }
-    else if (field_name == "color")
+    else if (field_name == "color" || field_name == "c")
     {
         field.type = PatternFieldType::Color;
         if (spec == "level")
@@ -248,12 +234,42 @@ get_and_validate_field(const std::string_view field_name,
     return ParsingError::UnknownFieldType;
 }
 
+consteval bool validate_align_spec(std::string_view align)
+{
+    char positioning = align[0];
+    if (positioning != '<' && positioning != '>' && positioning != '^')
+    {
+        return false;
+    }
+
+    std::string_view width = align.substr(1);
+    if (width.size() == 0)
+    {
+        return false;
+    }
+
+    for (char c : width)
+    {
+        if (c < '0' || c > '9')
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 template <size_t MaxFmtStrLen, size_t MaxFields>
 struct Pattern
 {
     constexpr std::string_view fmt_str_to_sv() const
     {
         return std::string_view(fmt_str, fmt_str_len);
+    }
+
+    constexpr size_t get_max_fmt_str_len()
+    {
+        return MaxFmtStrLen;
     }
 
     ParsingError error = ParsingError::None;
@@ -270,50 +286,87 @@ struct Pattern
 // Others like {time:HMS} can be expanded into {} and don't need special
 // handling
 template <typename ParsedPatternT>
-consteval void
+consteval std::optional<ParsingError>
 expand_field(const PatternField field, std::string_view spec_name,
-             const bool drop_color_fields, ParsedPatternT& result)
+             std::string_view align_spec, const bool drop_color_fields,
+             ParsedPatternT& result)
 {
-    // Expansion used for most fields
-    std::string_view expansion = "{}";
+    // Returns true if the fmt str length max was exceeded, false otherwise
+    auto push_to_result = [&](std::string_view str) -> bool {
+        for (auto c : str)
+        {
+            if (result.fmt_str_len >= result.get_max_fmt_str_len())
+            {
+                return true;
+            }
+            result.fmt_str[result.fmt_str_len++] = c;
+        }
+        return false;
+    };
 
-    // Below are all cases which override the basic field expansion
+    // clang-format off
+#define PUSH_AND_RETURN_ON_ERROR(str)             \
+    if (push_to_result(str))                      \
+    {                                             \
+        return ParsingError::ExceedsMaxFmtStrLen; \
+    }
+    // clang-format on
+
     if (field.type == PatternFieldType::Time)
     {
+        // NOTE: Alignment is not supported for time fields since they can be
+        // split into multiple fields, meaning they can't be aligned as one
         if (field.spec == PatternFieldSpec::TimeHMSus)
         {
-            expansion = "{}.{:06}";
+            PUSH_AND_RETURN_ON_ERROR("{}.{:06}");
         }
         else if (field.spec == PatternFieldSpec::TimeHMSns)
         {
-            expansion = "{}.{:09}";
+            PUSH_AND_RETURN_ON_ERROR("{}.{:09}");
         }
     }
     else if (field.type == PatternFieldType::Color)
     {
         if (drop_color_fields)
         {
-            // If on a color field, and we're supposed to drop them, expand
-            // into nothing
-            expansion = "";
+            // Do nothing if drop_color_fields is true
         }
         else if (field.spec == PatternFieldSpec::ColorCustom)
         {
-            parse_and_write_custom_color_spec(spec_name, result);
-            // Return early because the color code has already been written to
-            // the result
-            return;
+            // Parse the list of comma separated color code names, and push all
+            // of them into the result
+            for (auto name_it : std::views::split(spec_name, ','))
+            {
+                std::string_view name = { name_it.begin(), name_it.end() };
+                std::string_view code = ColorCode::from_name(name);
+                PUSH_AND_RETURN_ON_ERROR(code);
+            }
         }
         else if (field.spec == PatternFieldSpec::ColorReset)
         {
-            expansion = ColorCode::reset;
+            PUSH_AND_RETURN_ON_ERROR(ColorCode::reset);
+        }
+        else // ColorLevel
+        {
+            PUSH_AND_RETURN_ON_ERROR("{}");
         }
     }
-
-    for (auto c : expansion)
+    else
     {
-        result.fmt_str[result.fmt_str_len++] = c;
+        // For most fields, other than the ones handled above, simply push
+        // empty brackets, optionally with an alignment spec
+        if (align_spec.empty())
+        {
+            PUSH_AND_RETURN_ON_ERROR("{}");
+        }
+        else
+        {
+            PUSH_AND_RETURN_ON_ERROR("{:");
+            PUSH_AND_RETURN_ON_ERROR(align_spec);
+            PUSH_AND_RETURN_ON_ERROR("}");
+        }
     }
+    return {};
 }
 
 template <StaticString PatternStr, size_t MaxFields, size_t MaxFmtStrLen>
@@ -356,23 +409,50 @@ consteval auto parse_pattern(bool ignore_color_fields)
                 return result;
             }
 
-            std::string_view name_and_spec(&PatternStr.data[i + 1],
-                                           bracket_close_idx - i - 1);
+            std::string_view field_content{ &PatternStr.data[i + 1],
+                                            bracket_close_idx - i - 1 };
 
-            if (name_and_spec.empty())
+            if (field_content.empty())
             {
-                result.error = ParsingError::EmptyFieldName;
+                result.error = ParsingError::EmptyField;
                 return result;
             }
 
-            std::string_view field_name = name_and_spec;
+            std::string_view field_name = "";
             std::string_view spec_name = "";
-
-            size_t separator = name_and_spec.find_first_of(':');
-            if (separator != std::string_view::npos)
+            std::string_view align = "";
+            for (auto part : std::views::split(field_content, ':'))
             {
-                field_name = name_and_spec.substr(0, separator);
-                spec_name = name_and_spec.substr(separator + 1);
+
+                std::string_view s = { part.begin(), part.end() };
+
+                if (s.empty())
+                {
+                    result.error = ParsingError::InvalidFieldSyntax;
+                    return result;
+                }
+
+                // Test if the part is an align spec
+                if (validate_align_spec(s))
+                {
+                    align = s;
+                    continue;
+                }
+
+                if (field_name.empty())
+                {
+                    field_name = s;
+                }
+                else if (spec_name.empty())
+                {
+                    spec_name = s;
+                }
+                else
+                {
+                    // Too many field parts
+                    result.error = ParsingError::InvalidFieldSyntax;
+                    return result;
+                }
             }
 
             PatternField field;
@@ -412,7 +492,14 @@ consteval auto parse_pattern(bool ignore_color_fields)
 
             // Also send ignore_color_fields to expand_field() so it knows when
             // not to place any color information in the fmt str
-            expand_field(field, spec_name, ignore_color_fields, result);
+            err = expand_field(
+                      field, spec_name, align, ignore_color_fields, result)
+                      .value_or(ParsingError::None);
+            if (err != ParsingError::None)
+            {
+                result.error = err;
+                return result;
+            }
 
             i = bracket_close_idx + 1;
             continue;
@@ -550,16 +637,6 @@ get_level_color(const ColorConfig& colors, LogLevel level)
         return "";
 }
 
-// template <PatternField Field>
-// constexpr std::string_view get_color(const ColorConfig& colors, LogLevel
-// level)
-// {
-//     if constexpr (Field.spec == PatternFieldSpec::ColorLevel)
-//     {
-//         return get_level_color(const ColorConfig &colors, LogLevel level)
-//     }
-// }
-
 // Note to me in the future: decltype(auto) combined with return ()
 // adds a reference to the returned type, so pattern fields aren't
 // actually copied
@@ -567,8 +644,6 @@ template <PatternField Field>
 constexpr decltype(auto) get_field(const MessageData& data,
                                    const ColorConfig& colors)
 {
-    // ATTGÖRA: get_field verkar returnera level color oavsett vilken color
-    // spec det är
     if constexpr (Field.type == PatternFieldType::Level)
         return (level_to_name(data.level));
     else if constexpr (Field.type == PatternFieldType::Color)
@@ -627,20 +702,25 @@ class PatternFormatter : public PatternFormatterBase
     // Asserts for nice error msgs
     static_assert(_pattern_w_colors.error != ParsingError::UnterminatedBrace,
                   "pattern contains unterminated '{'");
-    static_assert(_pattern_w_colors.error != ParsingError::EmptyFieldName,
+    static_assert(_pattern_w_colors.error != ParsingError::EmptyField,
                   "pattern contains empty '{}'");
     static_assert(_pattern_w_colors.error != ParsingError::UnknownFieldType,
                   "pattern contains unknown field type");
     static_assert(_pattern_w_colors.error != ParsingError::InvalidFieldSpec,
                   "pattern contains unknown format spec or invalid field/spec "
                   "combination");
-    static_assert(_pattern_w_colors.error != ParsingError::TooManyFields,
-                  "pattern contains too many fields (use "
-                  "papper_set_long_pattern() instead)");
     static_assert(_pattern_w_colors.error
                       != ParsingError::UnmatchedClosingBrace,
                   "pattern contains '}' with no matching "
                   "opening brace '{'");
+    static_assert(_pattern_w_colors.error != ParsingError::InvalidFieldSyntax,
+                  "pattern contains a field with invalid syntax");
+    static_assert(_pattern_w_colors.error != ParsingError::TooManyFields,
+                  "pattern contains too many fields; use "
+                  "PAPPER_SET_LONG_PATTERN()");
+    static_assert(_pattern_w_colors.error != ParsingError::ExceedsMaxFmtStrLen,
+                  "pattern expands into a format string that exceeds the max; "
+                  "use PAPPER_SET_LONG_PATTERN()");
 
     template <std::size_t... I>
     std::string format_impl(const MessageData& data, const ColorConfig& colors,
@@ -688,8 +768,10 @@ class PatternFormatterHandler
     {
         // Set default pattern and colors
         _formatter = std::make_unique<
-            PatternFormatter<"{color:level}[{time:HMSus}] ({level}) "
-                             "({file}:{line}) {message}{color:reset}">>();
+            PatternFormatter<"{color:level}[{time:HMSus}] "
+                             "{level:<5} "
+                             "{color:underline}{file}:{line}{color:reset} "
+                             "{color:level}{message}{color:reset}">>();
         _colors = std::make_unique<ColorConfig>();
     }
 
