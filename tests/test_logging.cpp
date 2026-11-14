@@ -144,7 +144,7 @@ struct LevelGuard
 TEST_CASE(
     "logging: default pattern has local time, level, location and message")
 {
-    PAPPER_SET_PATTERN("[{time:HMSus}] ({level}) ({file:nameonly}:{line}) "
+    PAPPER_SET_PATTERN("[{time:HMSus}] ({level}) ({file}:{line}) "
                        "{message}");
     LogCapture capture;
 
@@ -271,7 +271,8 @@ TEST_CASE("logging: renaming a thread only affects later events")
 
     const auto lines = capture.wait_for_lines(3);
     REQUIRE(lines.size() == 3);
-    CHECK(std::regex_match(lines[0], std::regex{ R"(^INFO\|thread_\d+\|before$)" }));
+    CHECK(std::regex_match(lines[0],
+                           std::regex{ R"(^INFO\|thread_\d+\|before$)" }));
     CHECK(lines[1] == "INFO|renamed|after");
     CHECK(lines[2]
           == "INFO|renamed-again-with-a-name-too-long-for-sso|after again");

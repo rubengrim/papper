@@ -22,7 +22,7 @@ inline void set_sink(FILE* file, const FlushOn flush_on = FlushOn::LineEnd,
         = detail::NewSinkControlEvent{ .file = file,
                                        .buffering_mode = (int)flush_on,
                                        .buffer_size = buffer_size };
-    detail::push_control_event(detail::ControlEventType::Sink, req);
+    detail::push_control_event(detail::ControlEventType::NewSink, req);
 }
 
 // Returns 0 on success, errno if file opening failed
@@ -60,8 +60,8 @@ inline void set_colors(const ColorConfig& colors)
 {
     detail::ControlEvent event;
     event.new_colors
-        = detail::NewColorControlEvent{ new ColorConfig{ colors } };
-    detail::push_control_event(detail::ControlEventType::Color, event);
+        = detail::NewColorsControlEvent{ new ColorConfig{ colors } };
+    detail::push_control_event(detail::ControlEventType::NewColors, event);
 }
 
 // Sets the default queue size for threads created in the future.
@@ -153,7 +153,7 @@ inline void set_level(const LogLevel level)
     papper::detail::ControlEvent event;                                        \
     event.new_pattern = papper::detail::NewPatternControlEvent{ fmt };         \
     papper::detail::push_control_event(                                        \
-        papper::detail::ControlEventType::Pattern, event);                     \
+        papper::detail::ControlEventType::NewPattern, event);                  \
 }
 
 // Use this version if you need more fields, or if the expanded internal format
@@ -165,7 +165,7 @@ inline void set_level(const LogLevel level)
     papper::detail::ControlEvent event;                                        \
     event.new_pattern = papper::detail::NewPatternControlEvent{ fmt };         \
     papper::detail::push_control_event(                                        \
-        papper::detail::ControlEventType::Pattern, event);                     \
+        papper::detail::ControlEventType::NewPattern, event);                  \
 }
 
 // clang-format on

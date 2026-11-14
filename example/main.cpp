@@ -6,8 +6,10 @@
 #include <cstdlib>
 #include <fcntl.h>
 #include <iostream>
+#include <string_view>
 #include <thread>
 #include <unistd.h>
+#include <utility>
 
 papper::detail::Clock c;
 double begin = 0;
@@ -89,24 +91,45 @@ int main()
     // }
     // perf_command("disable\n", 8);
 
-    // PAPPER_SET_PATTERN("{time:HMS} {thread} {message}");
-    PAPPER_DEBUG("i terminal");
-    PAPPER_DEBUG("i fil");
-    papper::init_thread();
-    papper::set_thread_name("tråd1324");
+    // using namespace papper;
+    // using namespace papper::detail;
 
-    papper::disable_colors();
-    papper::set_sink(stdout);
-    PAPPER_TRACE("vit trace");
-    PAPPER_DEBUG("blå debug");
-    papper::set_colors(papper::ColorConfig{ .trace = papper::Color::black,
-                                            .debug = papper::Color::red });
-    PAPPER_TRACE("svart trace");
-    PAPPER_DEBUG("röd debug");
+    PAPPER_SET_PATTERN("{color:red,on_white,blink}{time:HMSns}{color:reset} "
+                       "{thread} {color:level}{message}{color:reset}");
 
-    PAPPER_SET_PATTERN(
-        "{color:level}{time:HMS} {thread} {message}{color:reset}");
-    PAPPER_WARN("ny pattern");
+    PAPPER_SET_PATTERN("[{time:HMSus}] {color:level}({level}){color:reset} "
+                       "({file}:{line}) {message}");
+    papper::set_colors(papper::ColorConfig{
+        .error = { papper::ColorCode::red, papper::ColorCode::blink } });
+
+    WARN("en varning");
+    ERROR("ett error");
+
+    // PAPPER_DEBUG("i terminal");
+    // PAPPER_DEBUG("i fil");
+    // papper::init_thread();
+    // papper::set_thread_name("tråd1324");
+
+    // papper::disable_colors();
+    // papper::set_sink(stdout);
+    // PAPPER_TRACE("vit trace");
+    // PAPPER_DEBUG("blå debug");
+    // papper::set_colors(papper::ColorConfig{ .error = papper::ColorCode::red
+    // }); PAPPER_TRACE("svart trace"); PAPPER_DEBUG("röd debug");
+    // PAPPER_ERROR("röd error");
+    // papper::enable_colors();
+
+    // // PAPPER_SET_PATTERN("{color:level}{time:HMS}
+    // // {color:white,on_red}{thread}
+    // // "
+    // //                    "{message}{color:reset}");
+    // PAPPER_WARN("ny pattern");
+
+    // PAPPER_TRACE("msg");
+    // PAPPER_DEBUG("msg");
+    // PAPPER_INFO("msg");
+    // PAPPER_WARN("msg");
+    // PAPPER_ERROR("msg");
 
     // PAPPER_INFO("hej {}, {}", 1, "hopp");
     // PAPPER_WARN("hej {}, {}", 1, "hopp");
@@ -115,10 +138,4 @@ int main()
     // // std::this_thread::sleep_for(std::chrono::milliseconds(1));
     // // papper::disable_colors();
     // // std::this_thread::sleep_for(std::chrono::milliseconds(1));
-
-    // PAPPER_TRACE("hej {}, {}", 1, "ropp");
-    // PAPPER_DEBUG("hej {}, {}", 1, "ropp");
-    // PAPPER_INFO("hej {}, {}", 1, "hrpp");
-    // PAPPER_WARN("hej {}, {}", 1, "hrpp");
-    // PAPPER_ERROR("hej {}, {}", 1, "ropp");
 }

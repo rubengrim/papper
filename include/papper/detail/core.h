@@ -17,6 +17,7 @@
 #include <fmt/format.h>
 
 #include "codec.h"
+#include "control_events.h"
 #include "level.h"
 #include "pattern.h"
 #include "queue.h"
@@ -32,45 +33,6 @@ namespace defaults
 inline size_t queue_size = 1048576; // 1Mb
 
 }
-
-// TODO: Rename to something like "control event"
-enum ControlEventType
-{
-    Sink,
-    Pattern,
-    Color,
-    ColorEnable,
-};
-
-struct NewSinkControlEvent
-{
-    FILE* file;
-    int buffering_mode;
-    size_t buffer_size;
-};
-
-struct NewPatternControlEvent
-{
-    const PatternFormatterBase* formatter;
-};
-
-struct NewColorControlEvent
-{
-    const ColorConfig* colors;
-};
-
-struct ColorEnableControlEvent
-{
-    bool enabled;
-};
-
-union ControlEvent
-{
-    NewSinkControlEvent new_sink;
-    NewPatternControlEvent new_pattern;
-    NewColorControlEvent new_colors;
-    ColorEnableControlEvent colors_enabled;
-};
 
 struct CallSiteStaticData
 {
@@ -317,21 +279,21 @@ class Backend
 
         switch (type)
         {
-        case ControlEventType::Sink: {
+        case ControlEventType::NewSink: {
             const NewSinkControlEvent sink_switch = event.new_sink;
             _sink.set_new_sink(sink_switch.file,
                                sink_switch.buffering_mode,
                                sink_switch.buffer_size);
             return;
         }
-        case ControlEventType::Pattern: {
+        case ControlEventType::NewPattern: {
             std::unique_ptr<const PatternFormatterBase> formatter{
                 event.new_pattern.formatter
             };
             _sink.set_new_pattern_formatter(std::move(formatter));
             return;
         }
-        case ControlEventType::Color: {
+        case ControlEventType::NewColors: {
             std::unique_ptr<const ColorConfig> colors{
                 event.new_colors.colors
             };
