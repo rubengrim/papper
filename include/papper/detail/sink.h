@@ -25,10 +25,11 @@ class SinkHandler
 
     void format_and_write(const MessageData& data)
     {
-        std::string formatted_message = _pattern_formatter.format(
-            data, _colors_enabled && _sink_supports_colors);
-        fwrite(formatted_message.data(), 1, formatted_message.size(), _sink);
-        fputc('\n', _sink);
+        _format_buffer.clear();
+        _pattern_formatter.format(
+            data, _colors_enabled && _sink_supports_colors, _format_buffer);
+        _format_buffer.push_back('\n');
+        fwrite(_format_buffer.data(), 1, _format_buffer.size(), _sink);
     }
 
     void set_new_sink(FILE* file, const int buffering_mode,
@@ -118,6 +119,7 @@ class SinkHandler
     bool _sink_supports_colors = get_sink_color_support();
     bool _colors_enabled = true; // If true, use colors if sink supports it
     PatternFormatterHandler _pattern_formatter;
+    fmt::memory_buffer _format_buffer;
 };
 
 }

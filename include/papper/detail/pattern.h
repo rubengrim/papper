@@ -13,6 +13,7 @@
 #include <utility>
 
 #include <fmt/chrono.h>
+#include <fmt/compile.h>
 #include <fmt/format.h>
 
 #include "color.h"
@@ -669,9 +670,9 @@ class PatternFormatterBase
 {
   public:
     virtual ~PatternFormatterBase() = default;
-    virtual std::string format(const MessageData& data,
-                               const ColorConfig& colors,
-                               bool use_colors) const = 0;
+    // Appends the formatted message to out
+    virtual void format(const MessageData& data, const ColorConfig& colors,
+                        bool use_colors, fmt::memory_buffer& out) const = 0;
 };
 
 template <StaticString PatternStr, size_t MaxFields = 16,
@@ -680,14 +681,21 @@ template <StaticString PatternStr, size_t MaxFields = 16,
 class PatternFormatter : public PatternFormatterBase
 {
   public:
-    std::string format(const MessageData& data, const ColorConfig& colors,
-                       bool use_colors) const override
+    void format(const MessageData& data, const ColorConfig& colors,
+                bool use_colors, fmt::memory_buffer& out) const override
     {
-        return format_impl(
-            data,
-            colors,
-            use_colors,
-            std::make_index_sequence<_pattern_w_colors.field_count>{});
+        if (use_colors)
+            format_impl<true>(
+                data,
+                colors,
+                out,
+                std::make_index_sequence<_pattern_w_colors.field_count>{});
+        else
+            format_impl<false>(
+                data,
+                colors,
+                out,
+                std::make_index_sequence<_pattern_wo_colors.field_count>{});
     }
 
   private:
@@ -722,41 +730,36 @@ class PatternFormatter : public PatternFormatterBase
                   "pattern expands into a format string that exceeds the max; "
                   "use PAPPER_SET_LONG_PATTERN()");
 
-    template <std::size_t... I>
-    std::string format_impl(const MessageData& data, const ColorConfig& colors,
-                            bool use_colors, std::index_sequence<I...>) const
+    // Equivalent to FMT_COMPILE
+    template <bool UseColors>
+    struct CompiledFmtStr : fmt::compiled_string
     {
-        if (use_colors)
+        using char_type = char;
+        constexpr explicit operator fmt::string_view() const
         {
-            // std::cout << _pattern_w_colors.field_count << std::endl;
-            constexpr std::string_view fmt_sv
-                = _pattern_w_colors.fmt_str_to_sv();
-
-            auto args = std::tuple_cat(
-                expand_and_process_arg<_pattern_w_colors.fields[I]>(
-                    get_field<_pattern_w_colors.fields[I]>(data, colors))...);
-
-            return std::apply(
-                [&fmt_sv](auto... x) {
-                    return fmt::vformat(fmt_sv, fmt::make_format_args(x...));
-                },
-                args);
+            if constexpr (UseColors)
+                return _pattern_w_colors.fmt_str_to_sv();
+            else
+                return _pattern_wo_colors.fmt_str_to_sv();
         }
-        else
-        {
-            constexpr std::string_view fmt_sv
-                = _pattern_wo_colors.fmt_str_to_sv();
+    };
 
-            auto args = std::tuple_cat(
-                expand_and_process_arg<_pattern_wo_colors.fields[I]>(
-                    get_field<_pattern_wo_colors.fields[I]>(data, colors))...);
+    template <bool UseColors, std::size_t... I>
+    void format_impl(const MessageData& data, const ColorConfig& colors,
+                     fmt::memory_buffer& out, std::index_sequence<I...>) const
+    {
+        constexpr const Pattern& pattern
+            = UseColors ? _pattern_w_colors : _pattern_wo_colors;
 
-            return std::apply(
-                [&fmt_sv](auto... x) {
-                    return fmt::vformat(fmt_sv, fmt::make_format_args(x...));
-                },
-                args);
-        }
+        auto args = std::tuple_cat(expand_and_process_arg<pattern.fields[I]>(
+            get_field<pattern.fields[I]>(data, colors))...);
+
+        std::apply(
+            [&out](const auto&... x) {
+                fmt::format_to(
+                    fmt::appender(out), CompiledFmtStr<UseColors>{}, x...);
+            },
+            args);
     }
 };
 
@@ -775,9 +778,10 @@ class PatternFormatterHandler
         _colors = std::make_unique<ColorConfig>();
     }
 
-    std::string format(const MessageData& data, bool use_colors)
+    void format(const MessageData& data, bool use_colors,
+                fmt::memory_buffer& out) const
     {
-        return _formatter->format(data, *_colors, use_colors);
+        _formatter->format(data, *_colors, use_colors, out);
     }
 
     void set_new_pattern_formatter(
