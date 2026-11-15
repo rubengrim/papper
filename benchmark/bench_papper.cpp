@@ -38,17 +38,16 @@ int main(int argc, char** argv)
     else if (options.mode == bench::Mode::Latency)
         papper::set_default_queue_size(512 * 1024);
 
-    // The default pattern is "[{time:HMSf}] ({level}) ({file:nameonly}:{line})
-    // {message}", the other benchmarks use an equivalent one
-    if (papper::set_sink(options.log_file.c_str(),
-                         true,
-                         papper::FlushOn::BufferFull,
-                         64 * 1024)
-        != 0)
+    PAPPER_SET_PATTERN("[{time:HMSus}] ({level}) ({file}:{line}) {message}");
+    papper::disable_colors();
+
+    if (papper::set_sink(options.log_file.c_str(), true) != 0)
     {
         std::perror("set_sink");
         return 1;
     }
+    papper::set_flush_behaviour({ .flush_mode = papper::FlushMode::BufferFull,
+                                  .buffer_size = 64 * 1024 });
 
     auto init_thread = [] {
         papper::init_thread();

@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 
+#include "fmt/format.h"
 #include "papper/detail/codec.h"
 #include "papper/detail/core.h"
 
@@ -84,8 +85,9 @@ TEST_CASE("codec: decode_and_format decodes a sequence of mixed arguments")
     Codec<double>::encode(write, d);
 
     const std::byte* read = storage.data();
-    const std::string formatted
-        = papper::detail::decode_and_format<int, std::string, double>(
-            "{} is {} ({})", read);
-    CHECK(formatted == "7 is seven (7.5)");
+
+    fmt::memory_buffer formatted;
+    papper::detail::decode_and_format<int, std::string, double>(
+        formatted, "{} is {} ({})", read);
+    CHECK(fmt::to_string(formatted) == "7 is seven (7.5)");
 }

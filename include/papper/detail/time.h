@@ -361,9 +361,9 @@ class Clock
                                           + _utc_offset_ns);
     }
 
-    double read_timestamp_ns()
+    double to_ns(uint64_t ts) const
     {
-        return _ns_per_tick * read_tsc();
+        return _ns_per_tick * ts;
     }
 
   private:

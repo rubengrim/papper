@@ -18,6 +18,7 @@
 
 #include "codec.h"
 #include "control_events.h"
+#include "globals.h"
 #include "level.h"
 #include "pattern.h"
 #include "queue.h"
@@ -27,18 +28,11 @@
 namespace papper::detail
 {
 
-namespace globals
-{
-
-inline std::atomic<size_t> default_queue_size = 1048576; // 1Mb
-
-}
-
 struct CallSiteStaticData
 {
     LogLevel level;
     const char* fmt_str = "";
-    std::string (*decoding_fn)(const char*, const std::byte*&);
+    void (*decoding_fn)(fmt::memory_buffer&, const char*, const std::byte*&);
     std::source_location location;
 };
 
@@ -57,7 +51,8 @@ static_assert(sizeof(LogEventHeader)
                      + sizeof(uint64_t) + sizeof(size_t));
 
 template <typename... Args>
-std::string decode_and_format(const char* fmt_str, const std::byte*& args_data)
+void decode_and_format(fmt::memory_buffer& out, const char* fmt_str,
+                       const std::byte*& args_data)
 {
     using ArgsTuple = std::tuple<Args...>;
     ArgsTuple args;
@@ -69,10 +64,10 @@ std::string decode_and_format(const char* fmt_str, const std::byte*& args_data)
          ...);
     }(std::index_sequence_for<Args...>{});
 
-    // Format
-    return std::apply(
+    std::apply(
         [&](auto&&... v) {
-            return fmt::vformat(fmt_str, fmt::make_format_args(v...));
+            return fmt::vformat_to(
+                std::back_inserter(out), fmt_str, fmt::make_format_args(v...));
         },
         args);
 }
@@ -173,8 +168,8 @@ class Backend
 
     void register_thread(ThreadContext* context)
     {
-        // if (_running.load(std::memory_order_acquire))
-        //     return;
+        if (is_shutdown_or_shutting_down())
+            return;
 
         ThreadContextNode* node = new ThreadContextNode;
         node->context = context;
@@ -280,10 +275,14 @@ class Backend
         switch (type)
         {
         case ControlEventType::NewSink: {
-            const NewSinkControlEvent sink_switch = event.new_sink;
-            _sink.set_new_sink(sink_switch.file,
-                               sink_switch.buffering_mode,
-                               sink_switch.buffer_size);
+            const NewSinkEvent sink_switch = event.new_sink;
+            _sink.set_new_sink(sink_switch.file);
+            return;
+        }
+        case ControlEventType::NewFlushConfig: {
+            const NewFlushBehaviourEvent flush = event.new_flush_behaviour;
+            _sink.set_flush_behaviour(
+                flush.mode, flush.buffer_size, flush.max_flush_interval_ms);
             return;
         }
         case ControlEventType::NewPattern: {
@@ -313,8 +312,8 @@ class Backend
         LogEventHeader header;
         Codec<LogEventHeader>::decode(buffer, header);
 
-        // nullptr means the event is a switch request
-        if (header.static_data == nullptr)
+        // nullptr means the event is a control event
+        if (header.static_data == nullptr) [[unlikely]]
         {
             read_and_process_control_event(buffer);
             return sizeof(LogEventHeader) + sizeof(ControlEventType)
@@ -324,8 +323,9 @@ class Backend
         const size_t total_event_size
             = sizeof(LogEventHeader) + header.payload_size;
 
-        std::string message = header.static_data->decoding_fn(
-            header.static_data->fmt_str, buffer);
+        _write_buffer.clear();
+        header.static_data->decoding_fn(
+            _write_buffer, header.static_data->fmt_str, buffer);
 
         if (header.static_data->level
             < _min_log_level.load(std::memory_order_acquire))
@@ -341,9 +341,10 @@ class Backend
             .filename = header.static_data->location.file_name(),
             .functionname = header.static_data->location.function_name(),
             .linenumber = header.static_data->location.line(),
-            .message = message,
+            .message
+            = std::string_view(_write_buffer.data(), _write_buffer.size()),
         };
-        _sink.format_and_write(message_data);
+        _sink.format_and_buffer(message_data);
 
         return total_event_size;
     }
@@ -451,20 +452,20 @@ class Backend
             const double resync_utc_offset_interval_ns = 1e6 * 1000.0;
             const double resync_to_system_clock_interval_ns = 1e6 * 100.0;
 
-            double last_utc_offset_resync = 0;
-            double last_system_clock_resync = 0;
+            uint64_t last_utc_offset_resync = 0;
+            uint64_t last_system_clock_resync = 0;
 
             auto poll_clock_resync = [&]() {
-                double now = _clock.read_timestamp_ns();
-                if (now - last_utc_offset_resync
+                uint64_t now = read_tsc();
+                if (_clock.to_ns(now - last_utc_offset_resync)
                     > resync_utc_offset_interval_ns)
                 {
                     _clock.recalculate_utc_offset();
                     last_utc_offset_resync = now;
                 }
 
-                now = _clock.read_timestamp_ns();
-                if (now - last_system_clock_resync
+                now = read_tsc();
+                if (_clock.to_ns(now - last_system_clock_resync)
                     > resync_to_system_clock_interval_ns)
                 {
                     _clock.sync_to_system_clock();
@@ -482,8 +483,12 @@ class Backend
                     // Reset backoff if there were events to process
                     backoff_us = 1;
                 }
-                else
+                else // Idle
                 {
+                    // If idle, poll the sink so messages that don't fill up
+                    // the buffer are still flushed periodically
+                    _sink.poll_for_flush_timeout(_clock);
+
                     // Double the backoff each time there were no events, up to
                     // max_backoff
                     std::this_thread::sleep_for(
@@ -500,6 +505,7 @@ class Backend
     std::atomic<State> _state = State::NotStarted;
 
     std::atomic<ThreadContextNode*> _head = nullptr;
+    fmt::memory_buffer _write_buffer;
     SinkHandler _sink;
     std::atomic<LogLevel> _min_log_level = LogLevel::Trace;
     Clock _clock;

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds the benchmarks in Release and runs latency and throughput benchmarks
-# for papper, Quill and spdlog.
+# for papper, Quill, spdlog and fmtlog.
 #
 # Usage: benchmark/run_benchmarks.sh [extra benchmark args]
 #   THREADS="1 4" sets the thread counts to run with (default "1 4")
@@ -10,7 +10,8 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 build_dir="${script_dir}/build"
 log_dir="${build_dir}/logs"
-libraries=(papper quill spdlog)
+# libraries=(papper quill spdlog fmtlog)
+libraries=(papper quill fmtlog)
 
 cmake -S "${script_dir}" -B "${build_dir}" -DCMAKE_BUILD_TYPE=Release
 cmake --build "${build_dir}" --parallel

@@ -1,7 +1,5 @@
 #pragma once
 
-#include "papper/detail/color.h"
-#include "papper/detail/pattern.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -11,42 +9,125 @@
 #include <unistd.h>
 #endif
 
+#include "color.h"
+#include "globals.h"
+#include "pattern.h"
+#include "time.h"
+
+namespace papper
+{
+
+enum class FlushMode
+{
+    Auto, // Will use LineEnd for terminals and BufferFull for files
+    LineEnd,
+    BufferFull,
+};
+
+struct FlushConfig
+{
+    FlushMode flush_mode = FlushMode::Auto;
+    size_t buffer_size = detail::globals::default_flush_buffer_size;
+    size_t max_flush_interval_ms
+        = detail::globals::default_max_flush_interval_ms;
+};
+
+}
+
 namespace papper::detail
 {
 
 class SinkHandler
 {
   public:
+    SinkHandler()
+    {
+        _pattern_formatter = PatternFormatterHandler{};
+
+        _sink = stdout;
+        _sink_is_terminal = sink_is_terminal();
+        _sink_supports_colors = get_sink_color_support();
+        _colors_enabled = true;
+
+        _flush_mode = FlushMode::Auto;
+        _buffered_flushing = resolve_flush_mode();
+        _flush_buffer_size = globals::default_flush_buffer_size;
+        _max_flush_interval_ns
+            = (double)(globals::default_max_flush_interval_ms * 1e6);
+        _last_flush_time = (int64_t)read_tsc();
+    }
+
     ~SinkHandler()
     {
-        fflush(_sink);
+        flush();
         close_file(_sink);
     }
 
-    void format_and_write(const MessageData& data)
+    void format_and_buffer(const MessageData& data)
     {
-        _format_buffer.clear();
         _pattern_formatter.format(
-            data, _colors_enabled && _sink_supports_colors, _format_buffer);
-        _format_buffer.push_back('\n');
-        fwrite(_format_buffer.data(), 1, _format_buffer.size(), _sink);
+            data, _colors_enabled && _sink_supports_colors, _buffer);
+        _buffer.push_back('\n');
+
+        if (!_buffered_flushing || _buffer.size() > _flush_buffer_size)
+        {
+            flush();
+            _last_flush_time = read_tsc();
+        }
     }
 
-    void set_new_sink(FILE* file, const int buffering_mode,
-                      const size_t buffer_size)
+    void poll_for_flush_timeout(const Clock& clock)
+    {
+        if (_buffered_flushing)
+        {
+            int64_t now = (int64_t)read_tsc();
+            if (clock.to_ns(now - _last_flush_time) >= _max_flush_interval_ns)
+            {
+                flush();
+                _last_flush_time = now;
+            }
+        }
+    }
+
+    void flush()
+    {
+        fwrite(_buffer.data(), 1, _buffer.size(), _sink);
+        fflush(_sink);
+        _buffer.clear();
+    }
+
+    void set_new_sink(FILE* file)
     {
         if (file == nullptr)
             return;
 
-        fflush(_sink);
+        flush();
         close_file(_sink);
 
         _sink = file;
+        // Set to unbuffered mode since papper handles buffering
+        setvbuf(_sink, nullptr, _IONBF, 0);
 
-        // TODO: setvbuf could fail, so might want to catch that somehow
-        setvbuf(_sink, nullptr, buffering_mode, buffer_size);
-
+        _sink_is_terminal = sink_is_terminal();
         _sink_supports_colors = get_sink_color_support();
+        _buffered_flushing = resolve_flush_mode();
+    }
+
+    void set_flush_behaviour(FlushMode mode, size_t buffer_size,
+                             size_t max_flush_interval_ms)
+    {
+        _flush_mode = mode;
+        _buffered_flushing = resolve_flush_mode();
+
+        _max_flush_interval_ns = (double)(max_flush_interval_ms * 1e6);
+        _flush_buffer_size = buffer_size;
+        if (_flush_buffer_size > _buffer.capacity())
+        {
+            // The buffer is flushed when it's size exceeds
+            // _flush_buffer_size, so allocate 50% more than needed for
+            // some breathing room
+            _buffer.reserve(_flush_buffer_size * 1.5);
+        }
     }
 
     void set_new_pattern_formatter(
@@ -65,11 +146,6 @@ class SinkHandler
         _colors_enabled = enabled;
     }
 
-    void flush()
-    {
-        fflush(_sink);
-    }
-
   private:
     void close_file(FILE* file)
     {
@@ -79,6 +155,32 @@ class SinkHandler
         }
     }
 
+    // Returns whether or not the sink should use buffered flushing based on
+    // the flush mode If mode is auto, use buffered flushing only for files
+    bool resolve_flush_mode() const
+    {
+        if (_flush_mode == FlushMode::Auto)
+        {
+            return !_sink_is_terminal;
+        }
+        else
+        {
+            return _flush_mode == FlushMode::BufferFull;
+        }
+    }
+
+    bool sink_is_terminal() const
+    {
+#if defined(__unix__) || defined(__APPLE__)
+        const int fd = fileno(_sink);
+        return fd >= 0 && isatty(fd) != 0;
+#else
+        // No windows support for now I can't test on there, assume it's a
+        // regular file
+        return false;
+#endif
+    }
+
     bool get_sink_color_support() const
     {
 #if defined(__unix__) || defined(__APPLE__)
@@ -86,8 +188,7 @@ class SinkHandler
             return false;
 
         // Check if sink is regular file
-        const int fd = fileno(_sink);
-        if (fd < 0 || !isatty(fd))
+        if (!sink_is_terminal())
         {
             return false;
         }
@@ -115,11 +216,19 @@ class SinkHandler
     }
 
   private:
-    FILE* _sink = stdout;
-    bool _sink_supports_colors = get_sink_color_support();
-    bool _colors_enabled = true; // If true, use colors if sink supports it
     PatternFormatterHandler _pattern_formatter;
-    fmt::memory_buffer _format_buffer;
+
+    FILE* _sink;
+    bool _sink_is_terminal;
+    bool _sink_supports_colors;
+    bool _colors_enabled;
+
+    Buffer _buffer;
+    FlushMode _flush_mode;
+    bool _buffered_flushing;
+    size_t _flush_buffer_size;
+    double _max_flush_interval_ns;
+    int64_t _last_flush_time;
 };
 
 }

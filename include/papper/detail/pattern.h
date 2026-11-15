@@ -22,6 +22,8 @@
 namespace papper::detail
 {
 
+using Buffer = fmt::basic_memory_buffer<char, 10000>;
+
 // https://blog.ganets.ky/StaticString/
 template <size_t N>
 struct StaticString
@@ -672,7 +674,7 @@ class PatternFormatterBase
     virtual ~PatternFormatterBase() = default;
     // Appends the formatted message to out
     virtual void format(const MessageData& data, const ColorConfig& colors,
-                        bool use_colors, fmt::memory_buffer& out) const = 0;
+                        bool use_colors, Buffer& out) const = 0;
 };
 
 template <StaticString PatternStr, size_t MaxFields = 16,
@@ -682,7 +684,7 @@ class PatternFormatter : public PatternFormatterBase
 {
   public:
     void format(const MessageData& data, const ColorConfig& colors,
-                bool use_colors, fmt::memory_buffer& out) const override
+                bool use_colors, Buffer& out) const override
     {
         if (use_colors)
             format_impl<true>(
@@ -746,7 +748,7 @@ class PatternFormatter : public PatternFormatterBase
 
     template <bool UseColors, std::size_t... I>
     void format_impl(const MessageData& data, const ColorConfig& colors,
-                     fmt::memory_buffer& out, std::index_sequence<I...>) const
+                     Buffer& out, std::index_sequence<I...>) const
     {
         constexpr const Pattern& pattern
             = UseColors ? _pattern_w_colors : _pattern_wo_colors;
@@ -778,8 +780,7 @@ class PatternFormatterHandler
         _colors = std::make_unique<ColorConfig>();
     }
 
-    void format(const MessageData& data, bool use_colors,
-                fmt::memory_buffer& out) const
+    void format(const MessageData& data, bool use_colors, Buffer& out) const
     {
         _formatter->format(data, *_colors, use_colors, out);
     }

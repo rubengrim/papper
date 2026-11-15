@@ -44,6 +44,8 @@ class LogCapture
 
         papper::set_thread_name("main");
         REQUIRE(papper::set_sink(_path.c_str(), true) == 0);
+        // Flush every line so the file contents can be polled immediately
+        papper::set_flush_behaviour({ .flush_mode = papper::FlushMode::LineEnd });
 
         _start_marker = sync();
     }

@@ -4,6 +4,7 @@
 
 #include "papper/detail/color.h"
 #include "papper/detail/pattern.h"
+#include "papper/detail/sink.h"
 
 namespace papper::detail
 {
@@ -15,39 +16,46 @@ namespace papper::detail
 enum ControlEventType
 {
     NewSink,
+    NewFlushConfig,
     NewPattern,
     NewColors,
     ColorEnable,
 };
 
-struct NewSinkControlEvent
+struct NewSinkEvent
 {
     FILE* file;
-    int buffering_mode;
-    size_t buffer_size;
 };
 
-struct NewPatternControlEvent
+struct NewFlushBehaviourEvent
+{
+    FlushMode mode;
+    size_t buffer_size;
+    size_t max_flush_interval_ms;
+};
+
+struct NewPatternEvent
 {
     const PatternFormatterBase* formatter;
 };
 
-struct NewColorsControlEvent
+struct NewColorsEvent
 {
     const ColorConfig* colors;
 };
 
-struct ColorEnableControlEvent
+struct ColorEnabledEvent
 {
     bool enabled;
 };
 
 union ControlEvent
 {
-    NewSinkControlEvent new_sink;
-    NewPatternControlEvent new_pattern;
-    NewColorsControlEvent new_colors;
-    ColorEnableControlEvent colors_enabled;
+    NewSinkEvent new_sink;
+    NewFlushBehaviourEvent new_flush_behaviour;
+    NewPatternEvent new_pattern;
+    NewColorsEvent new_colors;
+    ColorEnabledEvent colors_enabled;
 };
 
 }

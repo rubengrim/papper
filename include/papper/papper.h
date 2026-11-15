@@ -3,48 +3,55 @@
 // IWYU pragma: always_keep
 
 #include "detail/core.h"
+#include "papper/detail/control_events.h"
+#include "papper/detail/globals.h"
+#include "papper/detail/sink.h"
 #include <string_view>
 
 namespace papper
 {
 
-enum class FlushOn
-{
-    LineEnd = _IOLBF,
-    BufferFull = _IOFBF,
-};
-
-inline void set_sink(FILE* file, const FlushOn flush_on = FlushOn::LineEnd,
-                     const size_t buffer_size = BUFSIZ)
+inline void set_sink(FILE* file)
 {
     detail::ControlEvent req;
-    req.new_sink
-        = detail::NewSinkControlEvent{ .file = file,
-                                       .buffering_mode = (int)flush_on,
-                                       .buffer_size = buffer_size };
+    req.new_sink = detail::NewSinkEvent{
+        .file = file,
+    };
     detail::push_control_event(detail::ControlEventType::NewSink, req);
 }
 
 // Returns 0 on success, errno if file opening failed
 [[nodiscard]] inline int set_sink(const char* filename,
-                                  const bool truncate = false,
-                                  const FlushOn flush_on = FlushOn::LineEnd,
-                                  const size_t buffer_size = BUFSIZ)
+                                  const bool truncate = false)
 {
     FILE* new_sink = fopen(filename, truncate ? "w" : "a");
     if (!new_sink)
+    {
         return errno;
+    }
 
-    set_sink(new_sink, flush_on, buffer_size);
+    set_sink(new_sink);
 
     return 0;
+}
+
+inline void set_flush_behaviour(const FlushConfig& flush_config)
+{
+    detail::ControlEvent req;
+    req.new_flush_behaviour = {
+        .mode = flush_config.flush_mode,
+        .buffer_size = flush_config.buffer_size,
+        .max_flush_interval_ms = flush_config.max_flush_interval_ms,
+    };
+
+    detail::push_control_event(detail::ControlEventType::NewFlushConfig, req);
 }
 
 // Will enable colored output for sinks that support it
 inline void enable_colors()
 {
     detail::ControlEvent event;
-    event.colors_enabled = detail::ColorEnableControlEvent{ .enabled = true };
+    event.colors_enabled = detail::ColorEnabledEvent{ .enabled = true };
     detail::push_control_event(detail::ControlEventType::ColorEnable, event);
 }
 
@@ -52,15 +59,14 @@ inline void enable_colors()
 inline void disable_colors()
 {
     detail::ControlEvent event;
-    event.colors_enabled = detail::ColorEnableControlEvent{ .enabled = false };
+    event.colors_enabled = detail::ColorEnabledEvent{ .enabled = false };
     detail::push_control_event(detail::ControlEventType::ColorEnable, event);
 }
 
 inline void set_colors(const ColorConfig& colors)
 {
     detail::ControlEvent event;
-    event.new_colors
-        = detail::NewColorsControlEvent{ new ColorConfig{ colors } };
+    event.new_colors = detail::NewColorsEvent{ new ColorConfig{ colors } };
     detail::push_control_event(detail::ControlEventType::NewColors, event);
 }
 
@@ -152,7 +158,7 @@ inline void set_level(const LogLevel level)
     const papper::detail::PatternFormatterBase* fmt                            \
         = new papper::detail::PatternFormatter<pattern>;                       \
     papper::detail::ControlEvent event;                                        \
-    event.new_pattern = papper::detail::NewPatternControlEvent{ fmt };         \
+    event.new_pattern = papper::detail::NewPatternEvent{ fmt };                \
     papper::detail::push_control_event(                                        \
         papper::detail::ControlEventType::NewPattern, event);                  \
 }
@@ -164,7 +170,7 @@ inline void set_level(const LogLevel level)
     papper::detail::PatternFormatterBase* fmt = new papper::detail::           \
         PatternFormatter<pattern, max_fields, max_expanded_fmt_str_len>;       \
     papper::detail::ControlEvent event;                                        \
-    event.new_pattern = papper::detail::NewPatternControlEvent{ fmt };         \
+    event.new_pattern = papper::detail::NewPatternEvent{ fmt };                \
     papper::detail::push_control_event(                                        \
         papper::detail::ControlEventType::NewPattern, event);                  \
 }
