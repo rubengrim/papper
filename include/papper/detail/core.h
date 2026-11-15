@@ -14,6 +14,7 @@
 #include <unordered_map>
 #include <utility>
 
+#include <fmt/compile.h>
 #include <fmt/format.h>
 
 #include "codec.h"
@@ -31,8 +32,7 @@ namespace papper::detail
 struct CallSiteStaticData
 {
     LogLevel level;
-    const char* fmt_str = "";
-    void (*decoding_fn)(fmt::memory_buffer&, const char*, const std::byte*&);
+    void (*decoding_fn)(fmt::memory_buffer&, const std::byte*&);
     std::source_location location;
 };
 
@@ -50,9 +50,8 @@ static_assert(sizeof(LogEventHeader)
               == sizeof(CallSiteStaticData*) + sizeof(const char*)
                      + sizeof(uint64_t) + sizeof(size_t));
 
-template <typename... Args>
-void decode_and_format(fmt::memory_buffer& out, const char* fmt_str,
-                       const std::byte*& args_data)
+template <typename CompiledFmtStr, typename... Args>
+void decode_and_format(fmt::memory_buffer& out, const std::byte*& args_data)
 {
     using ArgsTuple = std::tuple<Args...>;
     ArgsTuple args;
@@ -66,22 +65,21 @@ void decode_and_format(fmt::memory_buffer& out, const char* fmt_str,
 
     std::apply(
         [&](auto&&... v) {
-            return fmt::vformat_to(
-                std::back_inserter(out), fmt_str, fmt::make_format_args(v...));
+            return fmt::format_to(fmt::appender(out), CompiledFmtStr{}, v...);
         },
         args);
 }
 
-template <typename... Args>
+template <typename CompiledFmtStr, typename... Args>
 struct DecodingFunction
 {
-    static constexpr auto value = &decode_and_format<Args...>;
+    static constexpr auto value = &decode_and_format<CompiledFmtStr, Args...>;
 };
 
 // Wrapper so that decode_and_format can be specialized from a macro
-template <typename... Args>
-DecodingFunction<std::remove_cvref_t<Args>...>
-get_decoding_function(Args&&...);
+template <typename CompiledFmtStr, typename... Args>
+DecodingFunction<CompiledFmtStr, std::remove_cvref_t<Args>...>
+get_decoding_function(CompiledFmtStr, Args&&...);
 
 class ThreadContext
 {
@@ -324,8 +322,7 @@ class Backend
             = sizeof(LogEventHeader) + header.payload_size;
 
         _write_buffer.clear();
-        header.static_data->decoding_fn(
-            _write_buffer, header.static_data->fmt_str, buffer);
+        header.static_data->decoding_fn(_write_buffer, buffer);
 
         if (header.static_data->level
             < _min_log_level.load(std::memory_order_acquire))
@@ -676,10 +673,11 @@ inline void push_log_event(const CallSiteStaticData* static_data,
 // clang-format off
 #define PAPPER_LOG_IMPL(level, fmt_str, ...)                                \
 {                                                                           \
+    static constexpr auto compiled_fmt_str = FMT_COMPILE(fmt_str);          \
     static constexpr papper::detail::CallSiteStaticData static_data = {     \
         level,                                                              \
-        fmt_str,                                                            \
-        decltype(papper::detail::get_decoding_function(__VA_ARGS__))::value,\
+        decltype(papper::detail::get_decoding_function(                     \
+            compiled_fmt_str __VA_OPT__(,) __VA_ARGS__))::value,            \
         std::source_location::current(),                                    \
     };                                                                      \
     papper::detail::push_log_event(&static_data __VA_OPT__(,) __VA_ARGS__); \

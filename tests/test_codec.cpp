@@ -87,7 +87,9 @@ TEST_CASE("codec: decode_and_format decodes a sequence of mixed arguments")
     const std::byte* read = storage.data();
 
     fmt::memory_buffer formatted;
-    papper::detail::decode_and_format<int, std::string, double>(
-        formatted, "{} is {} ({})", read);
+    static constexpr auto fmt_str = FMT_COMPILE("{} is {} ({})");
+    papper::detail::decode_and_format<std::remove_cvref_t<decltype(fmt_str)>,
+                                      int, std::string, double>(formatted,
+                                                                read);
     CHECK(fmt::to_string(formatted) == "7 is seven (7.5)");
 }
