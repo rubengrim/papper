@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <ratio>
 #include <source_location>
 #include <stdexcept>
 #include <string>
@@ -117,6 +118,11 @@ class ThreadContext
         return _is_alive.load(std::memory_order_acquire);
     }
 
+    std::atomic<bool>* get_ctrl_event_marker()
+    {
+        return &_ctrl_event_marker;
+    }
+
     void kill()
     {
         _is_alive.store(false, std::memory_order_release);
@@ -129,6 +135,7 @@ class ThreadContext
     std::deque<std::string> _names;
     Queue _q;
     std::atomic<bool> _is_alive;
+    std::atomic<bool> _ctrl_event_marker = false;
 };
 
 struct ThreadContextNode
@@ -270,37 +277,43 @@ class Backend
         ControlEvent event;
         Codec<ControlEvent>::decode(buffer, event);
 
+        std::atomic<bool>* ctrl_event_done_marker;
+        Codec<std::atomic<bool>*>::decode(buffer, ctrl_event_done_marker);
+
         switch (type)
         {
         case ControlEventType::NewSink: {
             const NewSinkEvent sink_switch = event.new_sink;
             _sink.set_new_sink(sink_switch.file);
-            return;
+            break;
         }
         case ControlEventType::NewFlushConfig: {
             const NewFlushBehaviourEvent flush = event.new_flush_behaviour;
             _sink.set_flush_behaviour(
                 flush.mode, flush.buffer_size, flush.max_flush_interval_ms);
-            return;
+            break;
         }
         case ControlEventType::NewPattern: {
             std::unique_ptr<const PatternFormatterBase> formatter{
                 event.new_pattern.formatter
             };
             _sink.set_new_pattern_formatter(std::move(formatter));
-            return;
+            break;
         }
         case ControlEventType::NewColors: {
             std::unique_ptr<const ColorConfig> colors{
                 event.new_colors.colors
             };
             _sink.set_new_colors(std::move(colors));
-            return;
+            break;
         }
         case ControlEventType::ColorEnable: {
             _sink.set_colors_enabled(event.colors_enabled.enabled);
+            break;
         }
         }
+
+        ctrl_event_done_marker->store(true, std::memory_order_release);
     }
 
     // Reads and processes one single event from the buffer.
@@ -618,7 +631,16 @@ inline void push_control_event(const ControlEventType type,
     Codec<ControlEventType>::encode(buffer, type);
     Codec<ControlEvent>::encode(buffer, req);
 
+    std::atomic<bool>* marker = context->get_ctrl_event_marker();
+    marker->store(false, std::memory_order_release);
+    Codec<std::atomic<bool>*>::encode(buffer, marker);
+
     q.commit_write(write.new_write_pos);
+
+    // Block until marker == true signaling the backend has processed the event
+    while (!marker->load(std::memory_order_acquire))
+    {
+    }
 };
 
 template <typename... Args>
