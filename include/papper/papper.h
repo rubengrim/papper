@@ -104,22 +104,41 @@ inline void set_level(const LogLevel level)
 
 // clang-format off
 
+// Dropping
 #define PAPPER_TRACE(fmt_str, ...) \
-    PAPPER_LOG_IMPL(papper::LogLevel::Trace, fmt_str __VA_OPT__(, ) __VA_ARGS__)
+    PAPPER_LOG_IMPL(false, papper::LogLevel::Trace, fmt_str __VA_OPT__(, ) __VA_ARGS__)
 
 #define PAPPER_INFO(fmt_str, ...) \
-    PAPPER_LOG_IMPL(papper::LogLevel::Info, fmt_str __VA_OPT__(, ) __VA_ARGS__)
+    PAPPER_LOG_IMPL(false, papper::LogLevel::Info, fmt_str __VA_OPT__(, ) __VA_ARGS__)
 
 #define PAPPER_DEBUG(fmt_str, ...) \
-    PAPPER_LOG_IMPL(papper::LogLevel::Debug, fmt_str __VA_OPT__(, ) __VA_ARGS__)
+    PAPPER_LOG_IMPL(false, papper::LogLevel::Debug, fmt_str __VA_OPT__(, ) __VA_ARGS__)
 
 #define PAPPER_WARN(fmt_str, ...) \
-    PAPPER_LOG_IMPL(papper::LogLevel::Warn, fmt_str __VA_OPT__(, ) __VA_ARGS__)
+    PAPPER_LOG_IMPL(false, papper::LogLevel::Warn, fmt_str __VA_OPT__(, ) __VA_ARGS__)
 
 #define PAPPER_ERROR(fmt_str, ...) \
-    PAPPER_LOG_IMPL(papper::LogLevel::Error, fmt_str __VA_OPT__(, ) __VA_ARGS__)
+    PAPPER_LOG_IMPL(false, papper::LogLevel::Error, fmt_str __VA_OPT__(, ) __VA_ARGS__)
 
+// Blocking
+#define PAPPER_TRACE_B(fmt_str, ...) \
+    PAPPER_LOG_IMPL(true, papper::LogLevel::Trace, fmt_str __VA_OPT__(, ) __VA_ARGS__)
+
+#define PAPPER_INFO_B(fmt_str, ...) \
+    PAPPER_LOG_IMPL(true, papper::LogLevel::Info, fmt_str __VA_OPT__(, ) __VA_ARGS__)
+
+#define PAPPER_DEBUG_B(fmt_str, ...) \
+    PAPPER_LOG_IMPL(true, papper::LogLevel::Debug, fmt_str __VA_OPT__(, ) __VA_ARGS__)
+
+#define PAPPER_WARN_B(fmt_str, ...) \
+    PAPPER_LOG_IMPL(true, papper::LogLevel::Warn, fmt_str __VA_OPT__(, ) __VA_ARGS__)
+
+#define PAPPER_ERROR_B(fmt_str, ...) \
+    PAPPER_LOG_IMPL(true, papper::LogLevel::Error, fmt_str __VA_OPT__(, ) __VA_ARGS__)
+
+// Shorter names
 #ifdef PAPPER_DEFINE_SHORT_NAMES
+// Dropping
 #define LOG_TRACE(fmt_str, ...) \
     PAPPER_TRACE(fmt_str  __VA_OPT__(, ) __VA_ARGS__)
 
@@ -134,9 +153,27 @@ inline void set_level(const LogLevel level)
 
 #define LOG_ERROR(fmt_str, ...) \
     PAPPER_ERROR(fmt_str  __VA_OPT__(, ) __VA_ARGS__)
+
+// Blocking 
+#define LOG_TRACE_B(fmt_str, ...) \
+    PAPPER_TRACE_B(fmt_str  __VA_OPT__(, ) __VA_ARGS__)
+
+#define LOG_INFO_B(fmt_str, ...) \
+    PAPPER_INFO_B(fmt_str  __VA_OPT__(, ) __VA_ARGS__)
+
+#define LOG_DEBUG_B(fmt_str, ...) \
+    PAPPER_DEBUG_B(fmt_str  __VA_OPT__(, ) __VA_ARGS__)
+
+#define LOG_WARN_B(fmt_str, ...) \
+    PAPPER_WARN_B(fmt_str  __VA_OPT__(, ) __VA_ARGS__)
+
+#define LOG_ERROR_B(fmt_str, ...) \
+    PAPPER_ERROR_B(fmt_str  __VA_OPT__(, ) __VA_ARGS__)
 #endif
 
+// Very short names
 #ifdef PAPPER_DEFINE_VERY_SHORT_NAMES
+// Dropping
 #define TRACE(fmt_str, ...) \
     PAPPER_TRACE(fmt_str  __VA_OPT__(, ) __VA_ARGS__)
 
@@ -151,6 +188,22 @@ inline void set_level(const LogLevel level)
 
 #define ERROR(fmt_str, ...) \
     PAPPER_ERROR(fmt_str  __VA_OPT__(, ) __VA_ARGS__)
+
+// Blocking
+#define TRACE_B(fmt_str, ...) \
+    PAPPER_TRACE_B(fmt_str  __VA_OPT__(, ) __VA_ARGS__)
+
+#define INFO_B(fmt_str, ...) \
+    PAPPER_INFO_B(fmt_str  __VA_OPT__(, ) __VA_ARGS__)
+
+#define DEBUG_B(fmt_str, ...) \
+    PAPPER_DEBUG_B(fmt_str  __VA_OPT__(, ) __VA_ARGS__)
+
+#define WARN_B(fmt_str, ...) \
+    PAPPER_WARN_B(fmt_str  __VA_OPT__(, ) __VA_ARGS__)
+
+#define ERROR_B(fmt_str, ...) \
+    PAPPER_ERROR_B(fmt_str  __VA_OPT__(, ) __VA_ARGS__)
 #endif
 
 #define PAPPER_SET_PATTERN(pattern)                                            \

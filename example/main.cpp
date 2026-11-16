@@ -8,19 +8,16 @@
 
 int main()
 {
-    PAPPER_WARN("in terminal");
+    papper::init_thread(33);
 
-    // papper::disable_colors();
-    // auto _ = papper::set_sink("test.log", true);
-    // papper::set_flush_behaviour(
-    //     papper::FlushConfig{ .flush_mode = papper::FlushMode::Auto,
-    //                          .buffer_size = 10000,
-    //                          .max_flush_interval_ms = 1000 });
+    for (int i = 0; i < 10000; i++)
+    {
+        WARN("blocking {}", i);
+    }
 
-    PAPPER_TRACE("msg");
-    PAPPER_DEBUG("msg");
-    papper::set_sink("text.log");
-    PAPPER_INFO("msg");
-    PAPPER_WARN("msg");
-    PAPPER_ERROR("msg");
+    // PAPPER_TRACE("msg");
+    // PAPPER_DEBUG("msg");
+    // PAPPER_INFO("msg");
+    // PAPPER_WARN("msg");
+    // PAPPER_ERROR("msg");
 }

@@ -396,6 +396,37 @@ TEST_CASE("logging: a full queue drops events without corrupting others")
     CHECK(bad_lines == 0);
 }
 
+TEST_CASE("logging: blocking macros wait for queue space instead of dropping")
+{
+    PAPPER_SET_PATTERN("{message}");
+    LogCapture capture;
+
+    // Same setup as the dropping test above: the tiny queue fills up almost
+    // immediately, but here every event must get through, in order
+    constexpr int n = 20000;
+    std::thread worker([&] {
+        papper::init_thread(512);
+        papper::set_thread_name("tiny");
+        for (int i = 0; i < n; ++i)
+            PAPPER_INFO_B(
+                "{} {}", i, std::string("some payload to fill the queue"));
+    });
+    worker.join();
+
+    const auto lines = capture.wait_for_lines(n);
+    REQUIRE(lines.size() == n);
+
+    int bad_lines = 0;
+    const std::regex re{ R"((\d+) some payload to fill the queue)" };
+    for (int i = 0; i < n; ++i)
+    {
+        std::smatch match;
+        if (!std::regex_match(lines[i], match, re) || std::stoi(match[1]) != i)
+            ++bad_lines;
+    }
+    CHECK(bad_lines == 0);
+}
+
 TEST_CASE("logging: switching sinks redirects output")
 {
     PAPPER_SET_PATTERN("{message}");

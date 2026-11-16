@@ -1,2 +1,1 @@
 - Make the backend touch the queues less often
-- Make functions that send control events block until they are processed by the backend

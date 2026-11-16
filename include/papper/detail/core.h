@@ -643,9 +643,9 @@ inline void push_control_event(const ControlEventType type,
     }
 };
 
-template <typename... Args>
-inline void push_log_event(const CallSiteStaticData* static_data,
-                           Args&&... args)
+template <bool Block, typename... Args>
+constexpr void push_log_event(const CallSiteStaticData* static_data,
+                              Args&&... args)
 {
     // Get the thread context, create it if it hasn't been initialized, and
     // drop the message if it's been marked dead
@@ -677,8 +677,21 @@ inline void push_log_event(const CallSiteStaticData* static_data,
 
     Queue::WriteReservation write = q.reserve_write(header_plus_args_size);
     std::byte* buffer = write.buffer;
-    if (buffer == nullptr)
-        return; // Not enough queue space, drop the event
+
+    if constexpr (Block)
+    {
+        // Block until there is space in queue
+        while (buffer == nullptr)
+        {
+            write = q.reserve_write(header_plus_args_size);
+            buffer = write.buffer;
+        }
+    }
+    else
+    {
+        if (buffer == nullptr)
+            return; // Not enough queue space, drop the event
+    }
 
     Codec<const CallSiteStaticData*>::encode(buffer, static_data);
     Codec<const char*>::encode(buffer, thread_name);
@@ -693,7 +706,8 @@ inline void push_log_event(const CallSiteStaticData* static_data,
 } // end namespace papper::detail
 
 // clang-format off
-#define PAPPER_LOG_IMPL(level, fmt_str, ...)                                \
+
+#define PAPPER_LOG_IMPL(block, level, fmt_str, ...)                         \
 {                                                                           \
     static constexpr auto compiled_fmt_str = FMT_COMPILE(fmt_str);          \
     static constexpr papper::detail::CallSiteStaticData static_data = {     \
@@ -702,6 +716,8 @@ inline void push_log_event(const CallSiteStaticData* static_data,
             compiled_fmt_str __VA_OPT__(,) __VA_ARGS__))::value,            \
         std::source_location::current(),                                    \
     };                                                                      \
-    papper::detail::push_log_event(&static_data __VA_OPT__(,) __VA_ARGS__); \
+    papper::detail::push_log_event<block>(                                  \
+            &static_data __VA_OPT__(,) __VA_ARGS__);                        \
 }
+
 // clang-format on
