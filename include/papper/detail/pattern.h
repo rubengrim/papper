@@ -701,12 +701,12 @@ class PatternFormatter : public PatternFormatterBase
     }
 
   private:
-    using Pattern = Pattern<MaxFmtStrLen, MaxFields>;
+    using PatternT = Pattern<MaxFmtStrLen, MaxFields>;
 
     // Parse the pattern twice, the second time dropping all color fields
-    static constexpr Pattern _pattern_w_colors
+    static constexpr PatternT _pattern_w_colors
         = parse_pattern<PatternStr, MaxFields, MaxFmtStrLen>(false);
-    static constexpr Pattern _pattern_wo_colors
+    static constexpr PatternT _pattern_wo_colors
         = parse_pattern<PatternStr, MaxFields, MaxFmtStrLen>(true);
 
     // Asserts for nice error msgs
@@ -750,7 +750,7 @@ class PatternFormatter : public PatternFormatterBase
     void format_impl(const MessageData& data, const ColorConfig& colors,
                      Buffer& out, std::index_sequence<I...>) const
     {
-        constexpr const Pattern& pattern
+        constexpr const PatternT& pattern
             = UseColors ? _pattern_w_colors : _pattern_wo_colors;
 
         auto args = std::tuple_cat(expand_and_process_arg<pattern.fields[I]>(

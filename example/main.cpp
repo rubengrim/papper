@@ -8,16 +8,18 @@
 
 int main()
 {
-    papper::init_thread(33);
-
-    for (int i = 0; i < 10000; i++)
+    if (papper::pin_backend_thread(0))
     {
-        WARN("blocking {}", i);
+        INFO_B("pinning succeeded");
+    }
+    else
+    {
+        ERROR_B("pinning failed");
     }
 
-    // PAPPER_TRACE("msg");
-    // PAPPER_DEBUG("msg");
-    // PAPPER_INFO("msg");
-    // PAPPER_WARN("msg");
-    // PAPPER_ERROR("msg");
+    PAPPER_TRACE("msg");
+    PAPPER_DEBUG("msg");
+    PAPPER_INFO("msg");
+    PAPPER_WARN("msg");
+    PAPPER_ERROR("msg");
 }

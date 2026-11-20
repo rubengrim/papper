@@ -20,6 +20,15 @@ enum ControlEventType
     NewPattern,
     NewColors,
     ColorEnable,
+    CPUAffinity,
+};
+
+enum ThreadControlEventStatus
+{
+    NotQueued,
+    InQueue,
+    Succeeded,
+    Failed,
 };
 
 struct NewSinkEvent
@@ -49,6 +58,11 @@ struct ColorEnabledEvent
     bool enabled;
 };
 
+struct CPUAffinityEvent
+{
+    int cpu_id;
+};
+
 union ControlEvent
 {
     NewSinkEvent new_sink;
@@ -56,6 +70,7 @@ union ControlEvent
     NewPatternEvent new_pattern;
     NewColorsEvent new_colors;
     ColorEnabledEvent colors_enabled;
+    CPUAffinityEvent cpu_affinity;
 };
 
 }

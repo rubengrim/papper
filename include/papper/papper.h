@@ -100,6 +100,17 @@ inline void set_level(const LogLevel level)
     detail::Backend::get_or_create_instance().set_new_minimum_log_level(level);
 }
 
+// Returns true if pinning was successful, false otherwise
+// Only linux supported for now, so will always return false for any other
+// platform
+inline bool pin_backend_thread(const int cpu_id)
+{
+    detail::ControlEvent event;
+    event.cpu_affinity.cpu_id = cpu_id;
+    return detail::push_control_event(detail::ControlEventType::CPUAffinity,
+                                      event);
+}
+
 } // end namespace papper
 
 // clang-format off

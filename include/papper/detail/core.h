@@ -7,13 +7,21 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
-#include <ratio>
+#include <memory>
 #include <source_location>
 #include <stdexcept>
 #include <string>
 #include <thread>
 #include <unordered_map>
 #include <utility>
+
+#if defined(__linux__)
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+#include <pthread.h>
+#include <sched.h>
+#endif
 
 #include <fmt/compile.h>
 #include <fmt/format.h>
@@ -82,12 +90,42 @@ template <typename CompiledFmtStr, typename... Args>
 DecodingFunction<CompiledFmtStr, std::remove_cvref_t<Args>...>
 get_decoding_function(CompiledFmtStr, Args&&...);
 
+// Small wrapper around a buffer, how many bytes it contains, and how much has
+// been read from it
+// Stored in the ThreadContext so the backend can copy the frontend queue and
+// read from this instead
+struct QueueCopyBuffer
+{
+    QueueCopyBuffer(const size_t capacity)
+    {
+        buffer = new std::byte[capacity];
+        memset(buffer, 0, capacity);
+    }
+
+    ~QueueCopyBuffer()
+    {
+        delete[] buffer;
+    }
+
+    QueueCopyBuffer(QueueCopyBuffer&) = delete;
+    QueueCopyBuffer& operator=(QueueCopyBuffer&) = delete;
+
+    // One or more events from the queue are copied into the copy buffer each
+    // poll iteration
+    std::byte* buffer;
+    // Contains the total size of all events currently in the copy buffer
+    size_t bytes_contained = 0;
+    size_t read_pos = 0;
+};
+
 class ThreadContext
 {
   public:
     ThreadContext(const size_t queue_size)
-        : _q{ queue_size }, _is_alive{ true }
+        : _is_alive{ true }, _q{ queue_size },
+          _copy_buffer{ _q.get_physical_capacity() }
     {
+
         static std::atomic<size_t> thread_counter = 0;
         _id = ++thread_counter;
         _names.emplace_back("thread_" + std::to_string(_id));
@@ -96,6 +134,11 @@ class ThreadContext
     Queue& get_queue()
     {
         return _q;
+    }
+
+    QueueCopyBuffer& get_queue_copy_buffer()
+    {
+        return _copy_buffer;
     }
 
     size_t get_id() const
@@ -118,9 +161,9 @@ class ThreadContext
         return _is_alive.load(std::memory_order_acquire);
     }
 
-    std::atomic<bool>* get_ctrl_event_marker()
+    std::atomic<ThreadControlEventStatus>* get_ctrl_event_status()
     {
-        return &_ctrl_event_marker;
+        return &_ctrl_event_status;
     }
 
     void kill()
@@ -133,9 +176,11 @@ class ThreadContext
     // Store history of thread names in case the name is changed while a log
     // event is still in the queue with a pointer to the old name
     std::deque<std::string> _names;
-    Queue _q;
     std::atomic<bool> _is_alive;
-    std::atomic<bool> _ctrl_event_marker = false;
+    std::atomic<ThreadControlEventStatus> _ctrl_event_status
+        = ThreadControlEventStatus::NotQueued;
+    Queue _q;
+    QueueCopyBuffer _copy_buffer;
 };
 
 struct ThreadContextNode
@@ -174,7 +219,9 @@ class Backend
     void register_thread(ThreadContext* context)
     {
         if (is_shutdown_or_shutting_down())
+        {
             return;
+        }
 
         ThreadContextNode* node = new ThreadContextNode;
         node->context = context;
@@ -216,6 +263,27 @@ class Backend
     }
 
   private:
+    bool try_pin_thread(int cpu_id)
+    {
+#if defined(__linux__)
+        if (cpu_id < 0 || cpu_id >= CPU_SETSIZE)
+        {
+            return false;
+        }
+
+        cpu_set_t cpuset;
+        CPU_ZERO(&cpuset);
+        CPU_SET(cpu_id, &cpuset);
+
+        return pthread_setaffinity_np(
+                   pthread_self(), sizeof(cpu_set_t), &cpuset)
+               == 0;
+#else
+        (void)cpu_id;
+        return false;
+#endif
+    }
+
     void set_backend_state(State state)
     {
         _state.store(state, std::memory_order_release);
@@ -277,9 +345,11 @@ class Backend
         ControlEvent event;
         Codec<ControlEvent>::decode(buffer, event);
 
-        std::atomic<bool>* ctrl_event_done_marker;
-        Codec<std::atomic<bool>*>::decode(buffer, ctrl_event_done_marker);
+        std::atomic<ThreadControlEventStatus>* ctrl_event_status;
+        Codec<std::atomic<ThreadControlEventStatus>*>::decode(
+            buffer, ctrl_event_status);
 
+        bool succeeded = true;
         switch (type)
         {
         case ControlEventType::NewSink: {
@@ -311,12 +381,25 @@ class Backend
             _sink.set_colors_enabled(event.colors_enabled.enabled);
             break;
         }
+        case ControlEventType::CPUAffinity: {
+            succeeded = try_pin_thread(event.cpu_affinity.cpu_id);
+            break;
+        }
         }
 
-        ctrl_event_done_marker->store(true, std::memory_order_release);
+        if (succeeded)
+        {
+            ctrl_event_status->store(ThreadControlEventStatus::Succeeded,
+                                     std::memory_order_release);
+        }
+        else
+        {
+            ctrl_event_status->store(ThreadControlEventStatus::Failed,
+                                     std::memory_order_release);
+        }
     }
 
-    // Reads and processes one single event from the buffer.
+    // Reads and processes one single event from a buffer.
     // Returns the number of bytes that were read
     size_t read_and_process_single_event(const std::byte* buffer)
     {
@@ -328,7 +411,7 @@ class Backend
         {
             read_and_process_control_event(buffer);
             return sizeof(LogEventHeader) + sizeof(ControlEventType)
-                   + sizeof(ControlEvent);
+                   + sizeof(ControlEvent) + sizeof(std::atomic<bool>*);
         }
 
         const size_t total_event_size
@@ -361,6 +444,154 @@ class Backend
 
     // Poll all threads for events, processes them, and returns true if there
     // were any
+    bool poll_threads_new()
+    {
+
+        ThreadContextNode* node = _head.load(std::memory_order_acquire);
+        while (node != nullptr)
+        {
+            Queue& q = node->context->get_queue();
+            QueueCopyBuffer& q_copy = node->context->get_queue_copy_buffer();
+
+            Queue::MultipleEventReadReservation read
+                = q.reserve_read_many_continuous();
+            if (read.buffer != nullptr)
+            {
+                // Make a copy of the events in the queue and commit the read
+                // immediately
+                std::memcpy(q_copy.buffer, read.buffer, read.size);
+                q.commit_multiple_event_read(read.new_read_pos);
+
+                q_copy.bytes_contained = read.size;
+                q_copy.read_pos = 0;
+            }
+            else
+            {
+                q_copy.bytes_contained = 0;
+                q_copy.read_pos = 0;
+            }
+
+            node = node->next;
+        }
+
+        bool processed_events = false;
+
+        // Read from the queue copies round-robin until they are all empty
+        bool processed_events_this_iter = false;
+        do
+        {
+            processed_events_this_iter = false;
+            node = _head.load(std::memory_order_acquire);
+
+            while (node != nullptr)
+            {
+                ThreadContextNode* next = node->next;
+
+                QueueCopyBuffer& q_copy
+                    = node->context->get_queue_copy_buffer();
+
+                // If there is more to read, read and process a single event
+                // from the queue copy
+                if (q_copy.read_pos < q_copy.bytes_contained)
+                {
+                    const size_t event_size = read_and_process_single_event(
+                        &q_copy.buffer[q_copy.read_pos]);
+                    q_copy.read_pos += event_size;
+
+                    processed_events_this_iter = true;
+                    processed_events = true;
+                }
+                else if (!node->context->thread_is_alive()
+                         && node->context->get_queue().is_empty())
+                {
+                    // Delete and remove the node+context from the
+                    // list if the thread has been killed and there
+                    // are no events left in the queue to process
+                    remove_and_delete_node(node);
+                }
+
+                node = next;
+            }
+        } while (processed_events_this_iter);
+
+        return processed_events;
+    }
+
+    // Drains every event that was send up to when shutdown was called
+    void drain_pre_shutdown_events_new()
+    {
+        ThreadContextNode* node = _head.load(std::memory_order_acquire);
+        while (node != nullptr)
+        {
+            Queue& q = node->context->get_queue();
+            QueueCopyBuffer& q_copy = node->context->get_queue_copy_buffer();
+            q_copy.bytes_contained = 0;
+            q_copy.read_pos = 0;
+
+            // Copy all events out of the queue
+            // Since the events could be discontinous in memory (i.e. the first
+            // part is stored at the end of the queue and the second part
+            // wrapped and is stored at the front), this needs to happen in two
+            // reads
+            // The events will be placed continously in q_copy no matter their
+            // placement in the queue
+            Queue::MultipleEventReadReservation read
+                = q.reserve_read_many_continuous();
+            if (read.buffer != nullptr)
+            {
+                std::memcpy(q_copy.buffer, read.buffer, read.size);
+                q.commit_multiple_event_read(read.new_read_pos);
+                q_copy.bytes_contained = read.size;
+
+                // If the first read succeeded, try reading again in case the
+                // events lie discontinuously in memory
+                read = q.reserve_read_many_continuous();
+                if (read.buffer != nullptr)
+                {
+                    std::memcpy(&q_copy.buffer[q_copy.bytes_contained],
+                                read.buffer,
+                                read.size);
+                    q.commit_multiple_event_read(read.new_read_pos);
+                    q_copy.bytes_contained += read.size;
+                }
+            }
+
+            node = node->next;
+        }
+
+        // Read from the queue copies round-robin until they are all empty
+        bool processed_events_this_iter = false;
+        do
+        {
+            processed_events_this_iter = false;
+            node = _head.load(std::memory_order_acquire);
+
+            while (node != nullptr)
+            {
+                QueueCopyBuffer& q_copy
+                    = node->context->get_queue_copy_buffer();
+
+                // If there is more to read, read and process a single event
+                // from the queue copy
+                if (q_copy.read_pos < q_copy.bytes_contained)
+                {
+                    const size_t event_size = read_and_process_single_event(
+                        &q_copy.buffer[q_copy.read_pos]);
+                    q_copy.read_pos += event_size;
+
+                    processed_events_this_iter = true;
+                }
+
+                // No node/thread context removal happens here because the
+                // process will exit soon anyway and free the memory
+
+                node = node->next;
+            }
+        } while (processed_events_this_iter);
+    }
+
+    // Poll all threads for events, processes them, and returns true if there
+    // were any
     bool poll_threads()
     {
         bool were_events_to_process = false;
@@ -371,12 +602,12 @@ class Backend
             ThreadContextNode* next = node->next;
             Queue& q = node->context->get_queue();
 
-            Queue::ReadReservation read = q.reserve_read();
+            Queue::SingleEventReadReservation read = q.reserve_read();
             if (read.buffer != nullptr)
             {
                 const size_t bytes_read
                     = read_and_process_single_event(read.buffer);
-                q.commit_read(read.current_read_pos + bytes_read);
+                q.commit_single_event_read(read.current_read_pos + bytes_read);
                 were_events_to_process = true;
             }
             else if (!node->context->thread_is_alive())
@@ -397,14 +628,15 @@ class Backend
     void drain_pre_shutdown_events()
     {
         // Get the current available bytes to read from each thread, so we
-        // don't read more than this and risk blocking forever if a background
+        // don't read more than this and risk blocking forever if a
+        // background
         // thread has detached and keeps pushing events
         std::unordered_map<size_t, size_t> bytes_to_read;
         ThreadContextNode* node = _head.load(std::memory_order_acquire);
         while (node != nullptr)
         {
             bytes_to_read[node->context->get_id()]
-                = node->context->get_queue().n_available_bytes();
+                = node->context->get_queue().get_n_available_bytes();
             node = node->next;
         }
 
@@ -422,12 +654,13 @@ class Backend
                 {
                     Queue& q = node->context->get_queue();
 
-                    Queue::ReadReservation read = q.reserve_read();
+                    Queue::SingleEventReadReservation read = q.reserve_read();
                     if (read.buffer != nullptr)
                     {
                         const size_t bytes_read
                             = read_and_process_single_event(read.buffer);
-                        q.commit_read(read.current_read_pos + bytes_read);
+                        q.commit_single_event_read(read.current_read_pos
+                                                   + bytes_read);
 
                         bytes_to_read[thread_id] -= bytes_read;
                         were_events_to_process = true;
@@ -454,10 +687,13 @@ class Backend
                 "can't run on this machine yet.");
         }
 
+        set_backend_state(State::Running);
+
         _backend_thread = std::thread([this]() {
             uint32_t backoff_us = 1;
             // TODO: Let user to change this
-            const uint32_t max_backoff_us = 200;
+            const uint32_t min_backoff_us = 1;
+            const uint32_t max_backoff_us = 1;
 
             const double resync_utc_offset_interval_ns = 1e6 * 1000.0;
             const double resync_to_system_clock_interval_ns = 1e6 * 100.0;
@@ -483,7 +719,6 @@ class Backend
                 }
             };
 
-            set_backend_state(State::Running);
             while (get_backend_state() == State::Running)
             {
                 poll_clock_resync();
@@ -491,7 +726,7 @@ class Backend
                 if (poll_threads())
                 {
                     // Reset backoff if there were events to process
-                    backoff_us = 1;
+                    backoff_us = min_backoff_us;
                 }
                 else // Idle
                 {
@@ -501,8 +736,7 @@ class Backend
 
                     // Double the backoff each time there were no events, up to
                     // max_backoff
-                    std::this_thread::sleep_for(
-                        std::chrono::microseconds(backoff_us));
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
                     backoff_us = std::min(backoff_us * 2, max_backoff_us);
                 }
             }
@@ -585,7 +819,9 @@ inline ThreadContext* get_or_init_thread_context(const size_t queue_size
 
 // Pushes a control event for switching sink, pattern or color config to the
 // thread queue
-inline void push_control_event(const ControlEventType type,
+// Returns whether or not processing of the event succeeded on the backend
+// A false return value can also mean that the event could not be sent
+inline bool push_control_event(const ControlEventType type,
                                const ControlEvent& req)
 {
     // Get the thread context, create it if it hasn't been initialized, and
@@ -598,16 +834,18 @@ inline void push_control_event(const ControlEventType type,
     else if (reinterpret_cast<std::uintptr_t>(context)
              == ThreadContextHandler::_dead_context_marker) [[unlikely]]
     {
-        return;
+        return false;
     }
 
     Queue& q = context->get_queue();
 
     const size_t write_size = sizeof(LogEventHeader) + sizeof(ControlEventType)
-                              + sizeof(ControlEvent);
+                              + sizeof(ControlEvent)
+                              + sizeof(std::atomic<ThreadControlEventStatus>*);
 
     std::byte* buffer = nullptr;
-    Queue::WriteReservation write = Queue::WriteReservation{};
+    Queue::SingleEventWriteReservation write
+        = Queue::SingleEventWriteReservation{};
     // Block if the queue is full and retry until we have our write block
     while (buffer == nullptr)
     {
@@ -618,7 +856,7 @@ inline void push_control_event(const ControlEventType type,
         if (Backend::get_or_create_instance().is_shutdown_or_shutting_down())
             [[unlikely]]
         {
-            return;
+            return false;
         }
     }
 
@@ -631,16 +869,27 @@ inline void push_control_event(const ControlEventType type,
     Codec<ControlEventType>::encode(buffer, type);
     Codec<ControlEvent>::encode(buffer, req);
 
-    std::atomic<bool>* marker = context->get_ctrl_event_marker();
-    marker->store(false, std::memory_order_release);
-    Codec<std::atomic<bool>*>::encode(buffer, marker);
+    std::atomic<ThreadControlEventStatus>* status
+        = context->get_ctrl_event_status();
+    status->store(ThreadControlEventStatus::InQueue,
+                  std::memory_order_release);
+    Codec<std::atomic<ThreadControlEventStatus>*>::encode(buffer, status);
 
-    q.commit_write(write.new_write_pos);
+    q.commit_write(write.new_write_pos, write.overflows);
 
-    // Block until marker == true signaling the backend has processed the event
-    while (!marker->load(std::memory_order_acquire))
+    // Block until the backend has processed the event
+    while (status->load(std::memory_order_acquire)
+           == ThreadControlEventStatus::InQueue)
     {
     }
+
+    const bool succeeded = status->load(std::memory_order_acquire)
+                           == ThreadControlEventStatus::Succeeded;
+    status->store(ThreadControlEventStatus::NotQueued,
+                  std::memory_order_release);
+
+    // Return whether or not processing of the control event succeeded
+    return succeeded;
 };
 
 template <bool Block, typename... Args>
@@ -675,7 +924,8 @@ constexpr void push_log_event(const CallSiteStaticData* static_data,
     // chrono, so must figure out how to handle that
     const uint64_t timestamp = read_tsc();
 
-    Queue::WriteReservation write = q.reserve_write(header_plus_args_size);
+    Queue::SingleEventWriteReservation write
+        = q.reserve_write(header_plus_args_size);
     std::byte* buffer = write.buffer;
 
     if constexpr (Block)
@@ -685,6 +935,13 @@ constexpr void push_log_event(const CallSiteStaticData* static_data,
         {
             write = q.reserve_write(header_plus_args_size);
             buffer = write.buffer;
+
+            // Check if backend is shut down or we'll spin forever
+            if (Backend::get_or_create_instance()
+                    .is_shutdown_or_shutting_down()) [[unlikely]]
+            {
+                return;
+            }
         }
     }
     else
@@ -700,7 +957,7 @@ constexpr void push_log_event(const CallSiteStaticData* static_data,
     // Encode args
     ((Codec<std::remove_cvref_t<Args>>::encode(buffer, args)), ...);
 
-    q.commit_write(write.new_write_pos);
+    q.commit_write(write.new_write_pos, write.overflows);
 }
 
 } // end namespace papper::detail
