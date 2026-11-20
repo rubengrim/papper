@@ -4,6 +4,9 @@
 #
 # Usage: benchmark/run_benchmarks.sh [extra benchmark args]
 #   THREADS="1 4" sets the thread counts to run with (default "1 4")
+#   AFFINITY=none|same|split pins the backend and benchmark threads to CPUs in
+#     the same or in different CPU clusters (default none). Only papper and
+#     Quill pin their backend thread
 #   Extra args are passed to every benchmark, e.g. --burst-size 1
 set -euo pipefail
 
@@ -11,7 +14,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 build_dir="${script_dir}/build"
 log_dir="${build_dir}/logs"
 # libraries=(papper quill spdlog fmtlog)
-libraries=(papper quill fmtlog)
+libraries=(papper quill)
 
 cmake -S "${script_dir}" -B "${build_dir}" -DCMAKE_BUILD_TYPE=Release
 cmake --build "${build_dir}" --parallel
@@ -24,6 +27,7 @@ for mode in latency throughput; do
             "${build_dir}/bench_${library}" "${mode}" \
                 --threads "${threads}" \
                 --log-file "${log_dir}/${library}.log" \
+                --affinity "${AFFINITY:-none}" \
                 "$@"
         done
     done

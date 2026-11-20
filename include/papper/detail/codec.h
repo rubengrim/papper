@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <string>
 #include <type_traits>
@@ -67,16 +68,16 @@ struct Codec<std::basic_string<CharT, Traits, Alloc>>
 
     static size_t encoded_size(const StringType& value)
     {
-        return sizeof(size_t) + value.size() * sizeof(CharT);
+        return sizeof(uint32_t) + value.size() * sizeof(CharT);
     }
 
     static void encode(std::byte*& buffer, const StringType& value)
     {
-        const size_t length = value.length();
-        const size_t byte_size = length * sizeof(CharT);
+        const uint32_t length = value.length();
+        const uint32_t byte_size = length * sizeof(CharT);
 
-        std::memcpy(buffer, &length, sizeof(size_t));
-        buffer += sizeof(size_t);
+        std::memcpy(buffer, &length, sizeof(uint32_t));
+        buffer += sizeof(uint32_t);
         std::memcpy(buffer, value.data(), byte_size);
         buffer += byte_size;
     }
@@ -84,12 +85,12 @@ struct Codec<std::basic_string<CharT, Traits, Alloc>>
     static void decode(const std::byte*& buffer, StringType& value)
     {
         size_t length;
-        std::memcpy(&length, buffer, sizeof(size_t));
-        buffer += sizeof(size_t);
+        std::memcpy(&length, buffer, sizeof(uint32_t));
+        buffer += sizeof(uint32_t);
 
         value.resize(length);
 
-        const size_t byte_size = length * sizeof(CharT);
+        const uint32_t byte_size = length * sizeof(CharT);
         std::memcpy(value.data(), buffer, byte_size);
         buffer += byte_size;
     }

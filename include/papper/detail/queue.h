@@ -3,13 +3,82 @@
 #include <atomic>
 #include <bit>
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <new>
+
+#if defined(__x86_64__) || defined(__i386__)
+#include <immintrin.h>
+#endif
 
 #include "globals.h"
 
 namespace papper::detail
 {
+
+#if defined(__x86_64__) || defined(__i386__)
+__attribute__((target("clflushopt"))) inline void
+flush_lines_clflushopt(std::uintptr_t first, const std::uintptr_t last,
+                       const std::uintptr_t line_size) noexcept
+{
+    for (; first < last; first += line_size)
+    {
+        _mm_clflushopt(reinterpret_cast<void*>(first));
+    }
+}
+
+inline void flush_lines_clflush(std::uintptr_t first,
+                                const std::uintptr_t last,
+                                const std::uintptr_t line_size) noexcept
+{
+    for (; first < last; first += line_size)
+    {
+        _mm_clflush(reinterpret_cast<void*>(first));
+    }
+}
+#endif
+
+// Evicts the cache lines from the one containing `begin` up to, but not
+// including, the one containing `end` from all caches. The line containing
+// `end` is left alone since it may not be fully written yet. No-op on
+// platforms without a cache line flush instruction.
+//
+// The consumer calls this on lines it has finished reading. Otherwise they can
+// stay shared in the consumer's cache until the producer wraps around and
+// writes to them again. On CPUs where the producer and consumer don't share a
+// cache (e.g. different CCXs on AMD), each of those writes then needs a slow
+// cross-cache ownership upgrade instead of finding the line uncached.
+inline void evict_cache_lines(const std::byte* begin,
+                              const std::byte* end) noexcept
+{
+#if defined(__x86_64__) || defined(__i386__)
+    constexpr std::uintptr_t line_size = 64;
+    const std::uintptr_t first
+        = reinterpret_cast<std::uintptr_t>(begin) & ~(line_size - 1);
+    const std::uintptr_t last
+        = reinterpret_cast<std::uintptr_t>(end) & ~(line_size - 1);
+
+    // clflushopt isn't ordered against other flushes, so it is much cheaper
+    // than clflush when flushing many lines. clflush is always available on
+    // x86-64
+    static const bool has_clflushopt = [] {
+        __builtin_cpu_init();
+        return __builtin_cpu_supports("clflushopt") != 0;
+    }();
+
+    if (has_clflushopt)
+    {
+        flush_lines_clflushopt(first, last, line_size);
+    }
+    else
+    {
+        flush_lines_clflush(first, last, line_size);
+    }
+#else
+    (void)begin;
+    (void)end;
+#endif
+}
 
 class Queue
 {
@@ -182,11 +251,22 @@ class Queue
         }
     }
 
-    // Call with MultipleEventReadReservation::new_read_pos
+    // Call with MultipleEventReadReservation::new_read_pos, once the reserved
+    // bytes have been read (or copied out)
     void commit_multiple_event_read(const size_t new_read_pos) noexcept
     {
+        // The reserved range is contiguous in _buffer, see
+        // reserve_read_many_continuous()
+        const std::byte* begin = &_buffer[_r & _wrap_mask];
+        const std::byte* end = begin + (new_read_pos - _r);
+
         _r = new_read_pos;
         _atomic_r.store(_r, std::memory_order_release);
+
+        // Evicts every line up to the one containing end, which the producer
+        // may still be writing to. That line is evicted by a later read, once
+        // it starts in that line and reads past it
+        evict_cache_lines(begin, end);
     }
 
   private:

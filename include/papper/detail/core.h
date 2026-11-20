@@ -442,9 +442,11 @@ class Backend
         return total_event_size;
     }
 
+#define USE_LOCAL_COPY_BACKEND_METHOD 1
+#if USE_LOCAL_COPY_BACKEND_METHOD
     // Poll all threads for events, processes them, and returns true if there
     // were any
-    bool poll_threads_new()
+    bool poll_threads()
     {
 
         ThreadContextNode* node = _head.load(std::memory_order_acquire);
@@ -518,7 +520,7 @@ class Backend
     }
 
     // Drains every event that was send up to when shutdown was called
-    void drain_pre_shutdown_events_new()
+    void drain_pre_shutdown_events()
     {
         ThreadContextNode* node = _head.load(std::memory_order_acquire);
         while (node != nullptr)
@@ -589,6 +591,8 @@ class Backend
             }
         } while (processed_events_this_iter);
     }
+
+#else
 
     // Poll all threads for events, processes them, and returns true if there
     // were any
@@ -676,6 +680,7 @@ class Backend
             }
         }
     }
+#endif
 
     Backend()
     {
@@ -692,8 +697,8 @@ class Backend
         _backend_thread = std::thread([this]() {
             uint32_t backoff_us = 1;
             // TODO: Let user to change this
-            const uint32_t min_backoff_us = 1;
-            const uint32_t max_backoff_us = 1;
+            const uint32_t min_backoff_us = 100;
+            const uint32_t max_backoff_us = 800;
 
             const double resync_utc_offset_interval_ns = 1e6 * 1000.0;
             const double resync_to_system_clock_interval_ns = 1e6 * 100.0;
@@ -722,23 +727,27 @@ class Backend
             while (get_backend_state() == State::Running)
             {
                 poll_clock_resync();
+                poll_threads();
+                std::this_thread::sleep_for(std::chrono::microseconds(100));
 
-                if (poll_threads())
-                {
-                    // Reset backoff if there were events to process
-                    backoff_us = min_backoff_us;
-                }
-                else // Idle
-                {
-                    // If idle, poll the sink so messages that don't fill up
-                    // the buffer are still flushed periodically
-                    _sink.poll_for_flush_timeout(_clock);
-
-                    // Double the backoff each time there were no events, up to
-                    // max_backoff
-                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                    backoff_us = std::min(backoff_us * 2, max_backoff_us);
-                }
+                // if (poll_threads())
+                // {
+                //     // Reset backoff if there were events to process
+                //     backoff_us = min_backoff_us;
+                // }
+                // else // Idle
+                // {
+                //     // If idle, poll the sink so messages that don't fill up
+                //     // the buffer are still flushed periodically
+                //     _sink.poll_for_flush_timeout(_clock);
+                //
+                //     // Double the backoff each time there were no events, up
+                //     to
+                //     // max_backoff
+                //     std::this_thread::sleep_for(
+                //         std::chrono::microseconds(backoff_us));
+                //     backoff_us = std::min(backoff_us * 2, max_backoff_us);
+                // }
             }
         });
 

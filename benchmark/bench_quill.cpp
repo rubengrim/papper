@@ -6,6 +6,7 @@
 #include "quill/Logger.h"
 #include "quill/sinks/FileSink.h"
 #include <chrono>
+#include <cstdint>
 #include <thread>
 
 // Same queue size as papper uses in latency mode, without growing it
@@ -74,6 +75,8 @@ int main(int argc, char** argv)
         if (message.find("Allocated a new SPSC queue") == std::string::npos)
             std::fprintf(stderr, "%s\n", message.c_str());
     };
+    if (options.backend_cpu >= 0)
+        backend_options.cpu_affinity = { (uint16_t)options.backend_cpu };
     quill::Backend::start(backend_options);
     std::this_thread::sleep_for(std::chrono::seconds(2));
 

@@ -49,6 +49,16 @@ int main(int argc, char** argv)
     papper::set_flush_behaviour({ .flush_mode = papper::FlushMode::BufferFull,
                                   .buffer_size = 64 * 1024 });
 
+    if (options.backend_cpu >= 0
+        && !papper::pin_backend_thread(options.backend_cpu))
+    {
+        std::fprintf(stderr,
+                     "Failed to pin backend thread to cpu %d\n",
+                     options.backend_cpu);
+        // Skip finish(), nothing was logged
+        std::_Exit(1);
+    }
+
     auto init_thread = [] {
         papper::init_thread();
         papper::set_thread_name("bench");
