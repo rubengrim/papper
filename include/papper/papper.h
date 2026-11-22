@@ -125,41 +125,70 @@ set_backend_sleep_duration(const std::chrono::system_clock::duration duration)
 
 // clang-format off
 
-// Dropping
+// Compile-time level filtering
+// Define PAPPER_MIN_LEVEL as one of these before including this header
+#define PAPPER_LEVEL_TRACE 0
+#define PAPPER_LEVEL_DEBUG 1
+#define PAPPER_LEVEL_INFO  2
+#define PAPPER_LEVEL_WARN  3
+#define PAPPER_LEVEL_ERROR 4
+
+#ifndef PAPPER_MIN_LEVEL
+#define PAPPER_MIN_LEVEL PAPPER_LEVEL_TRACE
+#endif
+
+#if PAPPER_MIN_LEVEL <= PAPPER_LEVEL_TRACE
 #define PAPPER_TRACE(fmt_str, ...) \
     PAPPER_LOG_IMPL(false, papper::LogLevel::Trace, fmt_str __VA_OPT__(, ) __VA_ARGS__)
-
-#define PAPPER_INFO(fmt_str, ...) \
-    PAPPER_LOG_IMPL(false, papper::LogLevel::Info, fmt_str __VA_OPT__(, ) __VA_ARGS__)
-
-#define PAPPER_DEBUG(fmt_str, ...) \
-    PAPPER_LOG_IMPL(false, papper::LogLevel::Debug, fmt_str __VA_OPT__(, ) __VA_ARGS__)
-
-#define PAPPER_WARN(fmt_str, ...) \
-    PAPPER_LOG_IMPL(false, papper::LogLevel::Warn, fmt_str __VA_OPT__(, ) __VA_ARGS__)
-
-#define PAPPER_ERROR(fmt_str, ...) \
-    PAPPER_LOG_IMPL(false, papper::LogLevel::Error, fmt_str __VA_OPT__(, ) __VA_ARGS__)
-
-// Blocking
 #define PAPPER_TRACE_B(fmt_str, ...) \
     PAPPER_LOG_IMPL(true, papper::LogLevel::Trace, fmt_str __VA_OPT__(, ) __VA_ARGS__)
+#else
+#define PAPPER_TRACE(...) (void)0 
+#define PAPPER_TRACE_B(...) (void)0
+#endif
 
-#define PAPPER_INFO_B(fmt_str, ...) \
-    PAPPER_LOG_IMPL(true, papper::LogLevel::Info, fmt_str __VA_OPT__(, ) __VA_ARGS__)
-
+#if PAPPER_MIN_LEVEL <= PAPPER_LEVEL_DEBUG
+#define PAPPER_DEBUG(fmt_str, ...) \
+    PAPPER_LOG_IMPL(false, papper::LogLevel::Debug, fmt_str __VA_OPT__(, ) __VA_ARGS__)
 #define PAPPER_DEBUG_B(fmt_str, ...) \
     PAPPER_LOG_IMPL(true, papper::LogLevel::Debug, fmt_str __VA_OPT__(, ) __VA_ARGS__)
+#else
+#define PAPPER_DEBUG(...) (void)0
+#define PAPPER_DEBUG_B(...) (void)0
+#endif
 
+#if PAPPER_MIN_LEVEL <= PAPPER_LEVEL_INFO
+#define PAPPER_INFO(fmt_str, ...) \
+    PAPPER_LOG_IMPL(false, papper::LogLevel::Info, fmt_str __VA_OPT__(, ) __VA_ARGS__)
+#define PAPPER_INFO_B(fmt_str, ...) \
+    PAPPER_LOG_IMPL(true, papper::LogLevel::Info, fmt_str __VA_OPT__(, ) __VA_ARGS__)
+#else
+#define PAPPER_INFO(...) (void)0
+#define PAPPER_INFO_B(...) (void)0
+#endif
+
+#if PAPPER_MIN_LEVEL <= PAPPER_LEVEL_WARN
+#define PAPPER_WARN(fmt_str, ...) \
+    PAPPER_LOG_IMPL(false, papper::LogLevel::Warn, fmt_str __VA_OPT__(, ) __VA_ARGS__)
 #define PAPPER_WARN_B(fmt_str, ...) \
     PAPPER_LOG_IMPL(true, papper::LogLevel::Warn, fmt_str __VA_OPT__(, ) __VA_ARGS__)
+#else
+#define PAPPER_WARN(...) (void)0
+#define PAPPER_WARN_B(...) (void)0
+#endif
 
+#if PAPPER_MIN_LEVEL <= PAPPER_LEVEL_ERROR
+#define PAPPER_ERROR(fmt_str, ...) \
+    PAPPER_LOG_IMPL(false, papper::LogLevel::Error, fmt_str __VA_OPT__(, ) __VA_ARGS__)
 #define PAPPER_ERROR_B(fmt_str, ...) \
     PAPPER_LOG_IMPL(true, papper::LogLevel::Error, fmt_str __VA_OPT__(, ) __VA_ARGS__)
+#else
+#define PAPPER_ERROR(...) (void)0
+#define PAPPER_ERROR_B(...) (void)0
+#endif
 
 // Shorter names
 #ifdef PAPPER_DEFINE_SHORT_NAMES
-// Dropping
 #define LOG_TRACE(fmt_str, ...) \
     PAPPER_TRACE(fmt_str  __VA_OPT__(, ) __VA_ARGS__)
 
@@ -175,7 +204,6 @@ set_backend_sleep_duration(const std::chrono::system_clock::duration duration)
 #define LOG_ERROR(fmt_str, ...) \
     PAPPER_ERROR(fmt_str  __VA_OPT__(, ) __VA_ARGS__)
 
-// Blocking 
 #define LOG_TRACE_B(fmt_str, ...) \
     PAPPER_TRACE_B(fmt_str  __VA_OPT__(, ) __VA_ARGS__)
 
@@ -194,7 +222,6 @@ set_backend_sleep_duration(const std::chrono::system_clock::duration duration)
 
 // Very short names
 #ifdef PAPPER_DEFINE_VERY_SHORT_NAMES
-// Dropping
 #define TRACE(fmt_str, ...) \
     PAPPER_TRACE(fmt_str  __VA_OPT__(, ) __VA_ARGS__)
 
@@ -210,7 +237,6 @@ set_backend_sleep_duration(const std::chrono::system_clock::duration duration)
 #define ERROR(fmt_str, ...) \
     PAPPER_ERROR(fmt_str  __VA_OPT__(, ) __VA_ARGS__)
 
-// Blocking
 #define TRACE_B(fmt_str, ...) \
     PAPPER_TRACE_B(fmt_str  __VA_OPT__(, ) __VA_ARGS__)
 
