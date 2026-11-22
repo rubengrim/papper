@@ -1,3 +1,6 @@
-- Make the backend touch the queues less often
+- Make backend sleep time configurable
 - Right now it's technically undefined behaviour to write more than _capacity to the frontend queue if the queue is almost full
-- sudo cpupower frequency-set -g performance
+- Crash handling?
+
+
+(sudo cpupower frequency-set -g performance)

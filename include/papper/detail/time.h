@@ -3,15 +3,11 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
-#include <iostream>
-#include <string>
 
-#if (defined(__x86_64__) || defined(__i386__))
-#if defined(_MSC_VER)
-#include <intrin.h>
-#else
+#include "platform.h"
+
+#if defined(PAPPER_X86)
 #include <x86intrin.h>
-#endif
 #endif
 
 // A lot of the code here is taken from:
@@ -22,16 +18,16 @@ namespace papper::detail
 
 inline uint64_t read_tsc()
 {
-#if (defined(__aarch64__))
+#if defined(PAPPER_ARM)
     uint64_t count;
     __asm__ volatile("mrs \t%0, cntvct_el0" : "=r"(count));
     return count;
-#elif (defined(__x86_64__) || defined(__i386__))
+#elif defined(PAPPER_X86)
     return __rdtsc();
 #endif
 }
 
-#if (defined(__aarch64__))
+#if defined(PAPPER_ARM)
 
 // On ARM you can read cntfrq_el0 to get the tick freq (guaranteed to be
 // invariant I think), and cntvct_el0 to get the tsc value
@@ -44,14 +40,14 @@ inline bool get_tsc_ns_per_tick(double& tick_time)
     return true;
 }
 
-#elif (defined(__x86_64__) || defined(__i386__))
+#elif defined(PAPPER_X86)
 
 // On x86 it's more difficult than on ARM because not every cpu supports
 // invariant tsc, and it's not standardized how you find out it it supports it
 // or what the tsc tick frequency is
 
 // This is used in cases where it was not possible to extract real info about
-// tick freq, so we need to measure it
+// tick freq, so it needs to be measured
 inline double measure_tsc_tick()
 {
     // TODO: This should be done multiple times and averaged, while catching
@@ -93,7 +89,6 @@ inline std::string cpu_brand_name()
     char* buffer = (char*)&int_buffer[0];
 
     x86_cpuid(0x00000000, 0, &cpuinfo);
-    // int* buffer_alias = (int*)&buffer[0];
     int_buffer[0] = cpuinfo.ebx;
     int_buffer[1] = cpuinfo.edx;
     int_buffer[2] = cpuinfo.ecx;
@@ -297,7 +292,7 @@ inline bool get_tsc_ns_per_tick(double& tick_time)
 }
 #endif
 
-// This is not thread safe, it's only meant to be used by backend
+// This is not thread safe, it's only meant to be used by the backend
 class Clock
 {
   public:

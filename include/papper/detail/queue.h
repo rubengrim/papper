@@ -7,16 +7,17 @@
 #include <cstring>
 #include <new>
 
-#if defined(__x86_64__) || defined(__i386__)
+#include "globals.h"
+#include "platform.h"
+
+#if defined(PAPPER_X86)
 #include <immintrin.h>
 #endif
-
-#include "globals.h"
 
 namespace papper::detail
 {
 
-#if defined(__x86_64__) || defined(__i386__)
+#if defined(PAPPER_X86)
 __attribute__((target("clflushopt"))) inline void
 flush_lines_clflushopt(std::uintptr_t first, const std::uintptr_t last,
                        const std::uintptr_t line_size) noexcept
@@ -38,20 +39,12 @@ inline void flush_lines_clflush(std::uintptr_t first,
 }
 #endif
 
-// Evicts the cache lines from the one containing `begin` up to, but not
-// including, the one containing `end` from all caches. The line containing
-// `end` is left alone since it may not be fully written yet. No-op on
-// platforms without a cache line flush instruction.
-//
-// The consumer calls this on lines it has finished reading. Otherwise they can
-// stay shared in the consumer's cache until the producer wraps around and
-// writes to them again. On CPUs where the producer and consumer don't share a
-// cache (e.g. different CCXs on AMD), each of those writes then needs a slow
-// cross-cache ownership upgrade instead of finding the line uncached.
-inline void evict_cache_lines(const std::byte* begin,
+// Flushes the cache lines from the one containing begin up to, but not
+// including, the one containing end from all caches
+inline void flush_cache_lines(const std::byte* begin,
                               const std::byte* end) noexcept
 {
-#if defined(__x86_64__) || defined(__i386__)
+#if defined(PAPPER_X86)
     constexpr std::uintptr_t line_size = 64;
     const std::uintptr_t first
         = reinterpret_cast<std::uintptr_t>(begin) & ~(line_size - 1);
@@ -142,7 +135,6 @@ class Queue
     {
         std::byte* buffer;
         size_t new_write_pos;
-        bool overflows;
     };
 
     SingleEventWriteReservation reserve_write(const size_t size) noexcept
@@ -154,31 +146,27 @@ class Queue
 
             if (_cached_r + _capacity - _w < size)
             {
-                return SingleEventWriteReservation{ nullptr, 0, false };
+                return SingleEventWriteReservation{ nullptr, 0 };
             }
         }
 
-        const size_t physical_write = _w & _wrap_mask;
-        // Check if the write will spill over into the buffer padding area
-        const bool overflows = physical_write + size >= _capacity;
-
-        return SingleEventWriteReservation{ &_buffer[physical_write],
-                                            _w + size,
-                                            overflows };
+        return SingleEventWriteReservation{ &_buffer[_w & _wrap_mask],
+                                            _w + size };
     }
 
-    void commit_write(const size_t new_write_pos,
-                      const bool overflows) noexcept
+    void commit_write(const size_t new_write_pos) noexcept
     {
-        _w = new_write_pos;
-
-        // If this write overlapped into the buffer padding area, mark where
-        // the overlap ended
-        if (overflows)
+        // Compare the old write pos with the new one and determine if the
+        // write overflows outside the capacity and into the buffer padding
+        // area, which means the next write will wrap to the beginning of the
+        // buffer
+        // Mark where the overflow ends so the reader knows it
+        if (((_w ^ new_write_pos) & ~_wrap_mask) != 0)
         {
-            _end_marker.store(_w, std::memory_order_relaxed);
+            _end_marker.store(new_write_pos, std::memory_order_relaxed);
         }
 
+        _w = new_write_pos;
         _atomic_w.store(_w, std::memory_order_release);
     }
 
@@ -251,22 +239,21 @@ class Queue
         }
     }
 
-    // Call with MultipleEventReadReservation::new_read_pos, once the reserved
-    // bytes have been read (or copied out)
+    // Call with MultipleEventReadReservation::new_read_pos
     void commit_multiple_event_read(const size_t new_read_pos) noexcept
     {
-        // The reserved range is contiguous in _buffer, see
-        // reserve_read_many_continuous()
+        // Flush the cache lines that this read touched (except the last one)
+        // This is done because in some cases these lines will stay in the
+        // consumer thread's cache even after reading is finished, which can
+        // make future writes to that memory slow
+        // The last cache line of the read is not flushed because the writer
+        // might still use part of it
         const std::byte* begin = &_buffer[_r & _wrap_mask];
         const std::byte* end = begin + (new_read_pos - _r);
+        flush_cache_lines(begin, end);
 
         _r = new_read_pos;
         _atomic_r.store(_r, std::memory_order_release);
-
-        // Evicts every line up to the one containing end, which the producer
-        // may still be writing to. That line is evicted by a later read, once
-        // it starts in that line and reads past it
-        evict_cache_lines(begin, end);
     }
 
   private:

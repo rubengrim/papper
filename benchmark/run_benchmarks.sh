@@ -14,7 +14,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 build_dir="${script_dir}/build"
 log_dir="${build_dir}/logs"
 # libraries=(papper quill spdlog fmtlog)
-libraries=(papper quill)
+libraries=(papper quill fmtlog)
 
 cmake -S "${script_dir}" -B "${build_dir}" -DCMAKE_BUILD_TYPE=Release
 cmake --build "${build_dir}" --parallel

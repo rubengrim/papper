@@ -64,9 +64,9 @@ TEST_CASE("codec: strings roundtrip")
 
 TEST_CASE("codec: string encoded size is length prefix plus characters")
 {
-    CHECK(Codec<std::string>::encoded_size("abc") == sizeof(size_t) + 3);
+    CHECK(Codec<std::string>::encoded_size("abc") == sizeof(uint32_t) + 3);
     CHECK(Codec<std::wstring>::encoded_size(L"abc")
-          == sizeof(size_t) + 3 * sizeof(wchar_t));
+          == sizeof(uint32_t) + 3 * sizeof(wchar_t));
     CHECK(roundtrip(std::wstring{ L"wide" }) == L"wide");
 }
 
@@ -89,7 +89,8 @@ TEST_CASE("codec: decode_and_format decodes a sequence of mixed arguments")
     fmt::memory_buffer formatted;
     static constexpr auto fmt_str = FMT_COMPILE("{} is {} ({})");
     papper::detail::decode_and_format<std::remove_cvref_t<decltype(fmt_str)>,
-                                      int, std::string, double>(formatted,
-                                                                read);
+                                      int,
+                                      std::string,
+                                      double>(formatted, read);
     CHECK(fmt::to_string(formatted) == "7 is seven (7.5)");
 }

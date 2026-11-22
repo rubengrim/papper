@@ -15,14 +15,6 @@
 #include <unordered_map>
 #include <utility>
 
-#if defined(__linux__)
-#ifndef _GNU_SOURCE
-#define _GNU_SOURCE
-#endif
-#include <pthread.h>
-#include <sched.h>
-#endif
-
 #include <fmt/compile.h>
 #include <fmt/format.h>
 
@@ -31,9 +23,18 @@
 #include "globals.h"
 #include "level.h"
 #include "pattern.h"
+#include "platform.h"
 #include "queue.h"
 #include "sink.h"
 #include "time.h"
+
+#if defined(PAPPER_LINUX)
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+#include <pthread.h>
+#include <sched.h>
+#endif
 
 namespace papper::detail
 {
@@ -265,7 +266,11 @@ class Backend
   private:
     bool try_pin_thread(int cpu_id)
     {
-#if defined(__linux__)
+        // Thread pinning is not a thing on mac, so this function only does
+        // something on linux (even openBSD and other non-linux unix platforms
+        // don't support pinning I think)
+        // Windows has pinning but is not supported by papper yet
+#if defined(PAPPER_LINUX)
         if (cpu_id < 0 || cpu_id >= CPU_SETSIZE)
         {
             return false;
@@ -417,8 +422,9 @@ class Backend
         const size_t total_event_size
             = sizeof(LogEventHeader) + header.payload_size;
 
-        _write_buffer.clear();
-        header.static_data->decoding_fn(_write_buffer, buffer);
+        _log_message_formatting_buffer.clear();
+        header.static_data->decoding_fn(_log_message_formatting_buffer,
+                                        buffer);
 
         if (header.static_data->level
             < _min_log_level.load(std::memory_order_acquire))
@@ -434,18 +440,16 @@ class Backend
             .filename = header.static_data->location.file_name(),
             .functionname = header.static_data->location.function_name(),
             .linenumber = header.static_data->location.line(),
-            .message
-            = std::string_view(_write_buffer.data(), _write_buffer.size()),
+            .message = std::string_view(_log_message_formatting_buffer.data(),
+                                        _log_message_formatting_buffer.size()),
         };
         _sink.format_and_buffer(message_data);
 
         return total_event_size;
     }
 
-#define USE_LOCAL_COPY_BACKEND_METHOD 1
-#if USE_LOCAL_COPY_BACKEND_METHOD
     // Poll all threads for events, processes them, and returns true if there
-    // were any
+    // were any events
     bool poll_threads()
     {
 
@@ -592,96 +596,6 @@ class Backend
         } while (processed_events_this_iter);
     }
 
-#else
-
-    // Poll all threads for events, processes them, and returns true if there
-    // were any
-    bool poll_threads()
-    {
-        bool were_events_to_process = false;
-
-        ThreadContextNode* node = _head.load(std::memory_order_acquire);
-        while (node != nullptr)
-        {
-            ThreadContextNode* next = node->next;
-            Queue& q = node->context->get_queue();
-
-            Queue::SingleEventReadReservation read = q.reserve_read();
-            if (read.buffer != nullptr)
-            {
-                const size_t bytes_read
-                    = read_and_process_single_event(read.buffer);
-                q.commit_single_event_read(read.current_read_pos + bytes_read);
-                were_events_to_process = true;
-            }
-            else if (!node->context->thread_is_alive())
-            {
-                // Delete and remove the node+context from the
-                // list if the thread has been killed and there
-                // are no events left in the queue to process
-                remove_and_delete_node(node);
-            }
-
-            node = next;
-        }
-
-        return were_events_to_process;
-    }
-
-    // Drains every event that was send up to when shutdown was called
-    void drain_pre_shutdown_events()
-    {
-        // Get the current available bytes to read from each thread, so we
-        // don't read more than this and risk blocking forever if a
-        // background
-        // thread has detached and keeps pushing events
-        std::unordered_map<size_t, size_t> bytes_to_read;
-        ThreadContextNode* node = _head.load(std::memory_order_acquire);
-        while (node != nullptr)
-        {
-            bytes_to_read[node->context->get_id()]
-                = node->context->get_queue().get_n_available_bytes();
-            node = node->next;
-        }
-
-        while (true)
-        {
-            bool were_events_to_process = false;
-
-            node = _head.load(std::memory_order_acquire);
-            while (node != nullptr)
-            {
-                const size_t thread_id = node->context->get_id();
-                // Check if there's more to read so we only read pre-shutdown
-                // events
-                if (bytes_to_read[thread_id] > 0)
-                {
-                    Queue& q = node->context->get_queue();
-
-                    Queue::SingleEventReadReservation read = q.reserve_read();
-                    if (read.buffer != nullptr)
-                    {
-                        const size_t bytes_read
-                            = read_and_process_single_event(read.buffer);
-                        q.commit_single_event_read(read.current_read_pos
-                                                   + bytes_read);
-
-                        bytes_to_read[thread_id] -= bytes_read;
-                        were_events_to_process = true;
-                    }
-                }
-
-                node = node->next;
-            }
-
-            if (!were_events_to_process)
-            {
-                break;
-            }
-        }
-    }
-#endif
-
     Backend()
     {
         if (!_clock.init())
@@ -695,11 +609,6 @@ class Backend
         set_backend_state(State::Running);
 
         _backend_thread = std::thread([this]() {
-            uint32_t backoff_us = 1;
-            // TODO: Let user to change this
-            const uint32_t min_backoff_us = 100;
-            const uint32_t max_backoff_us = 800;
-
             const double resync_utc_offset_interval_ns = 1e6 * 1000.0;
             const double resync_to_system_clock_interval_ns = 1e6 * 100.0;
 
@@ -729,25 +638,6 @@ class Backend
                 poll_clock_resync();
                 poll_threads();
                 std::this_thread::sleep_for(std::chrono::microseconds(100));
-
-                // if (poll_threads())
-                // {
-                //     // Reset backoff if there were events to process
-                //     backoff_us = min_backoff_us;
-                // }
-                // else // Idle
-                // {
-                //     // If idle, poll the sink so messages that don't fill up
-                //     // the buffer are still flushed periodically
-                //     _sink.poll_for_flush_timeout(_clock);
-                //
-                //     // Double the backoff each time there were no events, up
-                //     to
-                //     // max_backoff
-                //     std::this_thread::sleep_for(
-                //         std::chrono::microseconds(backoff_us));
-                //     backoff_us = std::min(backoff_us * 2, max_backoff_us);
-                // }
             }
         });
 
@@ -756,9 +646,8 @@ class Backend
 
   private:
     std::atomic<State> _state = State::NotStarted;
-
     std::atomic<ThreadContextNode*> _head = nullptr;
-    fmt::memory_buffer _write_buffer;
+    fmt::memory_buffer _log_message_formatting_buffer;
     SinkHandler _sink;
     std::atomic<LogLevel> _min_log_level = LogLevel::Trace;
     Clock _clock;
@@ -884,7 +773,7 @@ inline bool push_control_event(const ControlEventType type,
                   std::memory_order_release);
     Codec<std::atomic<ThreadControlEventStatus>*>::encode(buffer, status);
 
-    q.commit_write(write.new_write_pos, write.overflows);
+    q.commit_write(write.new_write_pos);
 
     // Block until the backend has processed the event
     while (status->load(std::memory_order_acquire)
@@ -966,7 +855,7 @@ constexpr void push_log_event(const CallSiteStaticData* static_data,
     // Encode args
     ((Codec<std::remove_cvref_t<Args>>::encode(buffer, args)), ...);
 
-    q.commit_write(write.new_write_pos, write.overflows);
+    q.commit_write(write.new_write_pos);
 }
 
 } // end namespace papper::detail

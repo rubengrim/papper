@@ -5,14 +5,15 @@
 #include <cstring>
 #include <memory>
 
-#if defined(__unix__) || defined(__APPLE__)
-#include <unistd.h>
-#endif
-
 #include "color.h"
 #include "globals.h"
 #include "pattern.h"
+#include "platform.h"
 #include "time.h"
+
+#if defined(PAPPER_LINUX) || defined(PAPPER_UNIX) || defined(PAPPER_APPLE)
+#include <unistd.h>
+#endif
 
 namespace papper
 {
@@ -171,7 +172,7 @@ class SinkHandler
 
     bool sink_is_terminal() const
     {
-#if defined(__unix__) || defined(__APPLE__)
+#if defined(PAPPER_LINUX) || defined(PAPPER_UNIX) || defined(PAPPER_APPLE)
         const int fd = fileno(_sink);
         return fd >= 0 && isatty(fd) != 0;
 #else
@@ -183,7 +184,7 @@ class SinkHandler
 
     bool get_sink_color_support() const
     {
-#if defined(__unix__) || defined(__APPLE__)
+#if defined(PAPPER_LINUX) || defined(PAPPER_UNIX) || defined(PAPPER_APPLE)
         if (_sink == nullptr)
             return false;
 

@@ -32,7 +32,7 @@ bool write_bytes(Queue& q, const std::vector<std::byte>& bytes)
     if (res.buffer == nullptr)
         return false;
     std::memcpy(res.buffer, bytes.data(), bytes.size());
-    q.commit_write(res.new_write_pos, res.overflows);
+    q.commit_write(res.new_write_pos);
     return true;
 }
 
@@ -48,8 +48,8 @@ std::optional<std::vector<std::byte>> read_bytes(Queue& q, size_t size)
     return bytes;
 }
 
-// One reserve_read_many_continuous() + commit_multiple_event_read() round. Returns the
-// reserved bytes, or nullopt if nothing was reserved
+// One reserve_read_many_continuous() + commit_multiple_event_read() round.
+// Returns the reserved bytes, or nullopt if nothing was reserved
 std::optional<std::vector<std::byte>> read_all_bytes(Queue& q)
 {
     const auto res = q.reserve_read_many_continuous();
@@ -120,7 +120,7 @@ TEST_CASE("queue: consecutive writes are laid out contiguously")
     const auto r1 = q.reserve_write(10);
     REQUIRE(r1.buffer != nullptr);
     CHECK(r1.new_write_pos == 10);
-    q.commit_write(r1.new_write_pos, r1.overflows);
+    q.commit_write(r1.new_write_pos);
 
     const auto r2 = q.reserve_write(20);
     REQUIRE(r2.buffer != nullptr);
@@ -139,7 +139,7 @@ TEST_CASE("queue: uncommitted write is not visible to reader")
     CHECK(read_bytes(q, a.size()) == a); // Only the committed write
     CHECK(q.is_empty());
 
-    q.commit_write(res.new_write_pos, res.overflows);
+    q.commit_write(res.new_write_pos);
     CHECK(!q.is_empty());
 }
 
@@ -151,7 +151,7 @@ TEST_CASE("queue: repeated reservations without commit return the same space")
     REQUIRE(r1.buffer != nullptr);
     CHECK(r1.buffer == r2.buffer);
     CHECK(r1.new_write_pos == r2.new_write_pos);
-    q.commit_write(r2.new_write_pos, r2.overflows);
+    q.commit_write(r2.new_write_pos);
 
     const auto p1 = q.reserve_read();
     const auto p2 = q.reserve_read();
@@ -241,7 +241,7 @@ TEST_CASE("queue: write crossing the end of the buffer stays contiguous")
     const auto first = q.reserve_write(40);
     REQUIRE(first.buffer != nullptr);
     std::byte* const base = first.buffer;
-    q.commit_write(first.new_write_pos, first.overflows);
+    q.commit_write(first.new_write_pos);
     REQUIRE(read_bytes(q, 40));
 
     // 40 + 30 > 64, so this spills into the overflow half of the buffer but is
@@ -252,7 +252,7 @@ TEST_CASE("queue: write crossing the end of the buffer stays contiguous")
     CHECK(res.buffer == base + 40);
     CHECK(res.new_write_pos == 70);
     std::memcpy(res.buffer, msg.data(), msg.size());
-    q.commit_write(res.new_write_pos, res.overflows);
+    q.commit_write(res.new_write_pos);
 
     const auto read_res = q.reserve_read();
     CHECK(read_res.buffer == base + 40);
@@ -398,7 +398,7 @@ TEST_CASE("queue: concurrent producer and consumer (SPSC stress)")
                         for (uint32_t i = 0; i < header.payload_size; ++i)
                             res.buffer[sizeof(Header) + i]
                                 = payload_byte(seq, i);
-                        q.commit_write(res.new_write_pos, res.overflows);
+                        q.commit_write(res.new_write_pos);
                         break;
                     }
                     if (consumer_failed.load())
@@ -449,7 +449,7 @@ TEST_CASE("queue: concurrent producer and consumer (SPSC stress)")
             }
 
             q.commit_single_event_read(res.current_read_pos + sizeof(Header)
-                          + header.payload_size);
+                                       + header.payload_size);
             ++expected_seq;
         }
 
@@ -523,7 +523,7 @@ TEST_CASE("queue read_all: uncommitted writes are not included")
     CHECK(read_all_bytes(q) == a);
     CHECK(q.reserve_read_many_continuous().buffer == nullptr);
 
-    q.commit_write(pending.new_write_pos, pending.overflows);
+    q.commit_write(pending.new_write_pos);
     const auto res = q.reserve_read_many_continuous();
     CHECK(res.size == 8);
     CHECK(res.new_read_pos == 16);
@@ -772,8 +772,8 @@ TEST_CASE("queue read_all: randomized writes and reads match a model")
             REQUIRE(res.size <= model_bytes.size());
             REQUIRE(res.buffer >= base);
             REQUIRE(res.buffer + res.size <= base + q.get_physical_capacity());
-            REQUIRE(std::equal(res.buffer, res.buffer + res.size,
-                               model_bytes.begin()));
+            REQUIRE(std::equal(
+                res.buffer, res.buffer + res.size, model_bytes.begin()));
 
             // The reservation must end on a message boundary, and only stop
             // short of everything that is available if write has wrapped
@@ -855,7 +855,7 @@ TEST_CASE("queue read_all: concurrent producer and consumer (SPSC stress)")
                         for (uint32_t i = 0; i < header.payload_size; ++i)
                             res.buffer[sizeof(Header) + i]
                                 = payload_byte(seq, i);
-                        q.commit_write(res.new_write_pos, res.overflows);
+                        q.commit_write(res.new_write_pos);
                         break;
                     }
                     if (consumer_failed.load())
