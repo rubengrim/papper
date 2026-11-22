@@ -55,6 +55,7 @@ enum class PatternFieldType
 {
     Level,
     ThreadName,
+    Date,
     Time,
     File,
     Function,
@@ -66,13 +67,20 @@ enum class PatternFieldType
 enum class PatternFieldSpec
 {
     None,
+    LevelPadded,  // Level names are padded so they take up the same space:
+                  // "INFO" becomes "INFO "
+    LevelShort,   // "I" and "D" instead of "INFO" and "DEBUG"
+    DateYMD,      // 2026-11-22
+    DateMDY,      // 11-22-2026
+    DateYMDSlash, // 2026/11/22
+    DateMDYSlash, // 11/22/2026
     TimeNS,       // Raw nanosecond timestamp
     TimeHMS,      // 16:08:09
     TimeHMSus,    // 16:08:09.796341
     TimeHMSns,    // 16:08:09.796341126
     FileNameOnly, // file.txt
     ColorLevel,   // Will use configured log level color
-    ColorReset,
+    ColorReset,   // Ansi reset code
     ColorCustom,
 };
 
@@ -124,6 +132,16 @@ get_and_validate_field(const std::string_view field_name,
             field.spec = PatternFieldSpec::None;
             return {};
         }
+        else if (spec == "padded")
+        {
+            field.spec = PatternFieldSpec::LevelPadded;
+            return {};
+        }
+        else if (spec == "short")
+        {
+            field.spec = PatternFieldSpec::LevelShort;
+            return {};
+        }
         return ParsingError::InvalidFieldSpec;
     }
     else if (field_name == "thread")
@@ -136,12 +154,36 @@ get_and_validate_field(const std::string_view field_name,
         }
         return ParsingError::InvalidFieldSpec;
     }
+    else if (field_name == "date")
+    {
+        field.type = PatternFieldType::Date;
+        if (spec == "Ymd-" || spec == "")
+        {
+            field.spec = PatternFieldSpec::DateYMD;
+            return {};
+        }
+        else if (spec == "mdY-")
+        {
+            field.spec = PatternFieldSpec::DateMDY;
+            return {};
+        }
+        else if (spec == "Ymd/")
+        {
+            field.spec = PatternFieldSpec::DateYMDSlash;
+            return {};
+        }
+        else if (spec == "mdY/")
+        {
+            field.spec = PatternFieldSpec::DateMDYSlash;
+            return {};
+        }
+        return ParsingError::InvalidFieldSpec;
+    }
     else if (field_name == "time")
     {
         field.type = PatternFieldType::Time;
         if (spec == "")
         {
-            // {time} defaults to HMSus
             field.spec = PatternFieldSpec::TimeHMSus;
             return {};
         }
@@ -172,7 +214,6 @@ get_and_validate_field(const std::string_view field_name,
         field.type = PatternFieldType::File;
         if (spec == "")
         {
-            // {file} defaults to FileNameOnly
             field.spec = PatternFieldSpec::FileNameOnly;
             return {};
         }
@@ -571,6 +612,45 @@ inline auto process_HMS_time_arg(
     }
 }
 
+template <PatternField Field>
+inline auto
+process_date_arg(const std::chrono::sys_time<std::chrono::nanoseconds>& arg)
+{
+    static constinit std::string formatted_date = "";
+    static constinit auto last_update
+        = std::chrono::sys_time<std::chrono::days>(std::chrono::days(-1));
+
+    const auto arg_d = std::chrono::floor<std::chrono::days>(arg);
+    if (arg_d != last_update)
+    {
+        formatted_date.clear();
+
+        if constexpr (Field.spec == PatternFieldSpec::DateYMD)
+        {
+            fmt::format_to(
+                std::back_inserter(formatted_date), "{:%Y-%m-%d}", arg_d);
+        }
+        else if constexpr (Field.spec == PatternFieldSpec::DateMDY)
+        {
+            fmt::format_to(
+                std::back_inserter(formatted_date), "{:%m-%d-%Y}", arg_d);
+        }
+        else if constexpr (Field.spec == PatternFieldSpec::DateYMDSlash)
+        {
+            fmt::format_to(
+                std::back_inserter(formatted_date), "{:%Y/%m/%d}", arg_d);
+        }
+        else if constexpr (Field.spec == PatternFieldSpec::DateMDYSlash)
+        {
+            fmt::format_to(
+                std::back_inserter(formatted_date), "{:%m/%d/%Y}", arg_d);
+        }
+
+        last_update = arg_d;
+    }
+
+    return std::make_tuple(formatted_date);
+}
 // Some arguments need to be processed and/or expanded into multiple arguments,
 // so do that here
 template <PatternField Field, typename ArgType>
@@ -587,6 +667,10 @@ auto expand_and_process_arg(const ArgType& arg)
         {
             return process_HMS_time_arg<Field>(arg);
         }
+    }
+    else if constexpr (Field.type == PatternFieldType::Date)
+    {
+        return process_date_arg<Field>(arg);
     }
     else if constexpr (Field.type == PatternFieldType::File
                        && Field.spec == PatternFieldSpec::FileNameOnly)
@@ -605,26 +689,65 @@ auto expand_and_process_arg(const ArgType& arg)
 
 // TODO: Remove this function and just write a custom formatter for
 // LogLevel
-[[maybe_unused]] constexpr std::string_view level_to_name(LogLevel level)
+template <PatternField Field>
+constexpr std::string_view level_to_name(LogLevel level)
 {
-    switch (level)
+
+    if constexpr (Field.spec == PatternFieldSpec::LevelPadded)
     {
-    case LogLevel::Trace:
-        return "TRACE";
-    case LogLevel::Debug:
-        return "DEBUG";
-    case LogLevel::Info:
-        return "INFO";
-    case LogLevel::Warn:
-        return "WARN";
-    case LogLevel::Error:
-        return "ERROR";
+        switch (level)
+        {
+        case LogLevel::Trace:
+            return "TRACE";
+        case LogLevel::Debug:
+            return "DEBUG";
+        case LogLevel::Info:
+            return "INFO ";
+        case LogLevel::Warn:
+            return "WARN ";
+        case LogLevel::Error:
+            return "ERROR";
+        }
+        return "UNKNOWN";
     }
-    return "UNKNOWN";
+    else if constexpr (Field.spec == PatternFieldSpec::LevelShort)
+    {
+        switch (level)
+        {
+        case LogLevel::Trace:
+            return "T";
+        case LogLevel::Debug:
+            return "D";
+        case LogLevel::Info:
+            return "I";
+        case LogLevel::Warn:
+            return "W";
+        case LogLevel::Error:
+            return "E";
+        }
+        return "UNKNOWN";
+    }
+    else
+    {
+        switch (level)
+        {
+        case LogLevel::Trace:
+            return "TRACE";
+        case LogLevel::Debug:
+            return "DEBUG";
+        case LogLevel::Info:
+            return "INFO";
+        case LogLevel::Warn:
+            return "WARN";
+        case LogLevel::Error:
+            return "ERROR";
+        }
+        return "UNKNOWN";
+    }
 }
 
-[[maybe_unused]] inline std::string_view
-get_level_color(const ColorConfig& colors, LogLevel level)
+inline std::string_view get_level_color(const ColorConfig& colors,
+                                        LogLevel level)
 {
     if (level == LogLevel::Trace)
         return colors.trace.color;
@@ -648,9 +771,11 @@ constexpr decltype(auto) get_field(const MessageData& data,
                                    const ColorConfig& colors)
 {
     if constexpr (Field.type == PatternFieldType::Level)
-        return (level_to_name(data.level));
+        return (level_to_name<Field>(data.level));
     else if constexpr (Field.type == PatternFieldType::Color)
         return (get_level_color(colors, data.level));
+    else if constexpr (Field.type == PatternFieldType::Date)
+        return (data.timestamp);
     else if constexpr (Field.type == PatternFieldType::Time)
         return (data.timestamp);
     else if constexpr (Field.type == PatternFieldType::File)
@@ -772,11 +897,10 @@ class PatternFormatterHandler
     PatternFormatterHandler()
     {
         // Set default pattern and colors
-        _formatter = std::make_unique<
-            PatternFormatter<"{color:level}[{time:HMSus}] "
-                             "{level:<5} "
-                             "{color:underline}{file}:{line}{color:reset} "
-                             "{color:level}{message}{color:reset}">>();
+        _formatter = std::make_unique<PatternFormatter<
+            "{color:level}[{date:Ymd-} {time:HMSus}] {level:padded} "
+            "{color:underline}{file}:{line}{color:reset} "
+            "{color:level}{message}{color:reset}">>();
         _colors = std::make_unique<ColorConfig>();
     }
 

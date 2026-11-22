@@ -13,11 +13,11 @@ namespace papper
 
 inline void set_sink(FILE* file)
 {
-    detail::ControlEvent req;
-    req.new_sink = detail::NewSinkEvent{
+    detail::ControlEvent event;
+    event.sink = detail::SinkEvent{
         .file = file,
     };
-    detail::push_control_event(detail::ControlEventType::NewSink, req);
+    detail::push_control_event(detail::ControlEventType::Sink, event);
 }
 
 // Returns 0 on success, errno if file opening failed
@@ -37,14 +37,15 @@ inline void set_sink(FILE* file)
 
 inline void set_flush_behaviour(const FlushConfig& flush_config)
 {
-    detail::ControlEvent req;
-    req.new_flush_behaviour = {
+    detail::ControlEvent event;
+    event.flush_behaviour = {
         .mode = flush_config.flush_mode,
         .buffer_size = flush_config.buffer_size,
         .max_flush_interval_ms = flush_config.max_flush_interval_ms,
     };
 
-    detail::push_control_event(detail::ControlEventType::NewFlushConfig, req);
+    detail::push_control_event(detail::ControlEventType::FlushBehaviour,
+                               event);
 }
 
 // Will enable colored output for sinks that support it
@@ -52,7 +53,7 @@ inline void enable_colors()
 {
     detail::ControlEvent event;
     event.colors_enabled = detail::ColorEnabledEvent{ .enabled = true };
-    detail::push_control_event(detail::ControlEventType::ColorEnable, event);
+    detail::push_control_event(detail::ControlEventType::ColorsEnable, event);
 }
 
 // Disables colored output for all sinks
@@ -60,14 +61,14 @@ inline void disable_colors()
 {
     detail::ControlEvent event;
     event.colors_enabled = detail::ColorEnabledEvent{ .enabled = false };
-    detail::push_control_event(detail::ControlEventType::ColorEnable, event);
+    detail::push_control_event(detail::ControlEventType::ColorsEnable, event);
 }
 
 inline void set_colors(const ColorConfig& colors)
 {
     detail::ControlEvent event;
-    event.new_colors = detail::NewColorsEvent{ new ColorConfig{ colors } };
-    detail::push_control_event(detail::ControlEventType::NewColors, event);
+    event.colors = detail::ColorsEvent{ new ColorConfig{ colors } };
+    detail::push_control_event(detail::ControlEventType::Colors, event);
 }
 
 // Sets the default queue size for threads created in the future.
@@ -106,9 +107,18 @@ inline void set_level(const LogLevel level)
 inline bool pin_backend_thread(const int cpu_id)
 {
     detail::ControlEvent event;
-    event.cpu_affinity.cpu_id = cpu_id;
+    event.cpu_affinity = detail::CPUAffinityEvent{ cpu_id };
     return detail::push_control_event(detail::ControlEventType::CPUAffinity,
                                       event);
+}
+
+inline void
+set_backend_sleep_duration(const std::chrono::system_clock::duration duration)
+{
+    detail::ControlEvent event;
+    event.sleep_duration = detail::BackendSleepDurationEvent{ duration };
+    detail::push_control_event(detail::ControlEventType::BackendSleepDuration,
+                               event);
 }
 
 } // end namespace papper
@@ -217,26 +227,26 @@ inline bool pin_backend_thread(const int cpu_id)
     PAPPER_ERROR_B(fmt_str  __VA_OPT__(, ) __VA_ARGS__)
 #endif
 
-#define PAPPER_SET_PATTERN(pattern)                                            \
+#define PAPPER_SET_PATTERN(pattern_str)                                        \
 {                                                                              \
     const papper::detail::PatternFormatterBase* fmt                            \
-        = new papper::detail::PatternFormatter<pattern>;                       \
+        = new papper::detail::PatternFormatter<pattern_str>;                   \
     papper::detail::ControlEvent event;                                        \
-    event.new_pattern = papper::detail::NewPatternEvent{ fmt };                \
+    event.pattern = papper::detail::PatternEvent{ fmt };                       \
     papper::detail::push_control_event(                                        \
-        papper::detail::ControlEventType::NewPattern, event);                  \
+        papper::detail::ControlEventType::Pattern, event);                     \
 }
 
 // Use this version if you need more fields, or if the expanded internal format
 // string length reaches its max
-#define PAPPER_SET_LONG_PATTERN(pattern, max_fields, max_expanded_fmt_str_len) \
-{                                                                              \
-    papper::detail::PatternFormatterBase* fmt = new papper::detail::           \
-        PatternFormatter<pattern, max_fields, max_expanded_fmt_str_len>;       \
-    papper::detail::ControlEvent event;                                        \
-    event.new_pattern = papper::detail::NewPatternEvent{ fmt };                \
-    papper::detail::push_control_event(                                        \
-        papper::detail::ControlEventType::NewPattern, event);                  \
+#define PAPPER_SET_LONG_PATTERN(pattern_str, max_fields, max_expanded_fmt_str_len) \
+{                                                                                  \
+    papper::detail::PatternFormatterBase* fmt = new papper::detail::               \
+        PatternFormatter<pattern_str, max_fields, max_expanded_fmt_str_len>;       \
+    papper::detail::ControlEvent event;                                            \
+    event.pattern = papper::detail::PatternEvent{ fmt };                           \
+    papper::detail::push_control_event(                                            \
+        papper::detail::ControlEventType::Pattern, event);                         \
 }
 
 // clang-format on

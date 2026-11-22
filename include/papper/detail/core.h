@@ -60,8 +60,11 @@ static_assert(sizeof(LogEventHeader)
               == sizeof(CallSiteStaticData*) + sizeof(const char*)
                      + sizeof(uint64_t) + sizeof(size_t));
 
+// Formats log arguments into the output buffer
+// Returns void but is marked auto so clangd can't skip it and lose in-editor
+// format string/argument validation
 template <typename CompiledFmtStr, typename... Args>
-void decode_and_format(fmt::memory_buffer& out, const std::byte*& args_data)
+auto decode_and_format(fmt::memory_buffer& out, const std::byte*& args_data)
 {
     using ArgsTuple = std::tuple<Args...>;
     ArgsTuple args;
@@ -264,6 +267,11 @@ class Backend
     }
 
   private:
+    void set_sleep_duration(const std::chrono::system_clock::duration duration)
+    {
+        _sleep_duration = duration;
+    }
+
     bool try_pin_thread(int cpu_id)
     {
         // Thread pinning is not a thing on mac, so this function only does
@@ -357,37 +365,39 @@ class Backend
         bool succeeded = true;
         switch (type)
         {
-        case ControlEventType::NewSink: {
-            const NewSinkEvent sink_switch = event.new_sink;
+        case ControlEventType::Sink: {
+            const SinkEvent sink_switch = event.sink;
             _sink.set_new_sink(sink_switch.file);
             break;
         }
-        case ControlEventType::NewFlushConfig: {
-            const NewFlushBehaviourEvent flush = event.new_flush_behaviour;
+        case ControlEventType::FlushBehaviour: {
+            const FlushBehaviourEvent flush = event.flush_behaviour;
             _sink.set_flush_behaviour(
                 flush.mode, flush.buffer_size, flush.max_flush_interval_ms);
             break;
         }
-        case ControlEventType::NewPattern: {
+        case ControlEventType::Pattern: {
             std::unique_ptr<const PatternFormatterBase> formatter{
-                event.new_pattern.formatter
+                event.pattern.formatter
             };
             _sink.set_new_pattern_formatter(std::move(formatter));
             break;
         }
-        case ControlEventType::NewColors: {
-            std::unique_ptr<const ColorConfig> colors{
-                event.new_colors.colors
-            };
+        case ControlEventType::Colors: {
+            std::unique_ptr<const ColorConfig> colors{ event.colors.colors };
             _sink.set_new_colors(std::move(colors));
             break;
         }
-        case ControlEventType::ColorEnable: {
+        case ControlEventType::ColorsEnable: {
             _sink.set_colors_enabled(event.colors_enabled.enabled);
             break;
         }
         case ControlEventType::CPUAffinity: {
             succeeded = try_pin_thread(event.cpu_affinity.cpu_id);
+            break;
+        }
+        case ControlEventType::BackendSleepDuration: {
+            set_sleep_duration(event.sleep_duration.duration);
             break;
         }
         }
@@ -633,11 +643,15 @@ class Backend
                 }
             };
 
+            // Main backend loop:
+            // 1. Check if the clock should be recalibrated
+            // 2. Process every event currently in each thread queue
+            // 3. Sleep for some duration
             while (get_backend_state() == State::Running)
             {
                 poll_clock_resync();
                 poll_threads();
-                std::this_thread::sleep_for(std::chrono::microseconds(100));
+                std::this_thread::sleep_for(_sleep_duration);
             }
         });
 
@@ -647,10 +661,12 @@ class Backend
   private:
     std::atomic<State> _state = State::NotStarted;
     std::atomic<ThreadContextNode*> _head = nullptr;
-    fmt::memory_buffer _log_message_formatting_buffer;
     SinkHandler _sink;
-    std::atomic<LogLevel> _min_log_level = LogLevel::Trace;
     Clock _clock;
+    fmt::memory_buffer _log_message_formatting_buffer;
+    std::atomic<LogLevel> _min_log_level = LogLevel::Trace;
+    std::chrono::system_clock::duration _sleep_duration
+        = std::chrono::microseconds(100);
     std::thread _backend_thread;
 };
 
@@ -720,7 +736,7 @@ inline ThreadContext* get_or_init_thread_context(const size_t queue_size
 // Returns whether or not processing of the event succeeded on the backend
 // A false return value can also mean that the event could not be sent
 inline bool push_control_event(const ControlEventType type,
-                               const ControlEvent& req)
+                               const ControlEvent& event)
 {
     // Get the thread context, create it if it hasn't been initialized, and
     // drop the message if it's been marked dead
@@ -765,7 +781,7 @@ inline bool push_control_event(const ControlEventType type,
     Codec<size_t>::encode(buffer, 0);
 
     Codec<ControlEventType>::encode(buffer, type);
-    Codec<ControlEvent>::encode(buffer, req);
+    Codec<ControlEvent>::encode(buffer, event);
 
     std::atomic<ThreadControlEventStatus>* status
         = context->get_ctrl_event_status();

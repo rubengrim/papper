@@ -13,24 +13,22 @@ namespace papper::detail
 /*
  * Fallback for not supported types
  */
+template <typename>
+inline constexpr bool always_false = false;
+
 template <typename T>
 struct Codec
 {
+    static_assert(always_false<T>, "type not supported by papper");
+
     static size_t encoded_size(const T&)
     {
-        static_assert(false, "type not supported");
         return 0;
     }
 
-    static void encode(std::byte*&, const T&)
-    {
-        static_assert(false, "type not supported");
-    }
+    static void encode(std::byte*&, const T&) {}
 
-    static void decode(const std::byte*&, T&)
-    {
-        static_assert(false, "type not supported");
-    }
+    static void decode(const std::byte*&, T&) {}
 };
 
 /*
