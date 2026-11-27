@@ -12,6 +12,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 
@@ -26,6 +27,7 @@
 #include "platform.h"
 #include "queue.h"
 #include "sink.h"
+#include "static_data_ref.h"
 #include "time.h"
 
 #if defined(PAPPER_LINUX)
@@ -60,24 +62,50 @@ static_assert(sizeof(LogEventHeader)
               == sizeof(CallSiteStaticData*) + sizeof(const char*)
                      + sizeof(uint64_t) + sizeof(size_t));
 
+template <>
+struct Codec<LogEventHeader>
+{
+    using DecodedT = LogEventHeader;
+
+    static size_t encoded_size(const LogEventHeader&)
+    {
+        return sizeof(LogEventHeader);
+    }
+
+    // LogEventHeader is always encoded element by element for performance
+    // reasons, so this function is never called
+    static void encode(std::byte*& buffer, const LogEventHeader& arg,
+                       const size_t size)
+    {
+        std::memcpy(buffer, &arg, size);
+        buffer += size;
+    }
+
+    static void decode(const std::byte*& buffer, DecodedT& arg)
+    {
+        std::memcpy(&arg, buffer, sizeof(LogEventHeader));
+        buffer += sizeof(LogEventHeader);
+    }
+};
+
+template <typename T>
+using decoded_t = typename Codec<T>::DecodedT;
+
 // Formats log arguments into the output buffer
 // Returns void but is marked auto so clangd can't skip it and lose in-editor
 // format string/argument validation
 template <typename CompiledFmtStr, typename... Args>
 auto decode_and_format(fmt::memory_buffer& out, const std::byte*& args_data)
 {
-    using ArgsTuple = std::tuple<Args...>;
-    ArgsTuple args;
+    std::tuple<decoded_t<Args>...> args;
 
     // Decode arguments into tuple
-    [&]<size_t... Is>(std::index_sequence<Is...>) {
-        (Codec<std::tuple_element_t<Is, ArgsTuple>>::decode(
-             args_data, std::get<Is>(args)),
-         ...);
-    }(std::index_sequence_for<Args...>{});
+    std::apply(
+        [&](auto&... arg) { (Codec<Args>::decode(args_data, arg), ...); },
+        args);
 
     std::apply(
-        [&](auto&&... v) {
+        [&](auto&... v) {
             return fmt::format_to(fmt::appender(out), CompiledFmtStr{}, v...);
         },
         args);
@@ -359,7 +387,7 @@ class Backend
         Codec<ControlEvent>::decode(buffer, event);
 
         std::atomic<ThreadControlEventStatus>* ctrl_event_status;
-        Codec<std::atomic<ThreadControlEventStatus>*>::decode(
+        Codec<StaticDataRef<std::atomic<ThreadControlEventStatus>>>::decode(
             buffer, ctrl_event_status);
 
         bool succeeded = true;
@@ -775,19 +803,20 @@ inline bool push_control_event(const ControlEventType type,
     }
 
     // Static data being nullptr signals that this is not a log event
-    Codec<const CallSiteStaticData*>::encode(buffer, nullptr);
-    Codec<const char*>::encode(buffer, "");
-    Codec<uint64_t>::encode(buffer, 0);
-    Codec<size_t>::encode(buffer, 0);
+    Codec<void*>::encode(buffer, nullptr, sizeof(void*));
+    Codec<void*>::encode(buffer, nullptr, sizeof(void*));
+    Codec<uint64_t>::encode(buffer, 0, sizeof(uint64_t));
+    Codec<size_t>::encode(buffer, 0, sizeof(size_t));
 
-    Codec<ControlEventType>::encode(buffer, type);
-    Codec<ControlEvent>::encode(buffer, event);
+    Codec<ControlEventType>::encode(buffer, type, sizeof(ControlEventType));
+    Codec<ControlEvent>::encode(buffer, event, sizeof(ControlEvent));
 
     std::atomic<ThreadControlEventStatus>* status
         = context->get_ctrl_event_status();
     status->store(ThreadControlEventStatus::InQueue,
                   std::memory_order_release);
-    Codec<std::atomic<ThreadControlEventStatus>*>::encode(buffer, status);
+    Codec<StaticDataRef<std::atomic<ThreadControlEventStatus>>>::encode(
+        buffer, StaticDataRef(status), sizeof(void*));
 
     q.commit_write(write.new_write_pos);
 
@@ -807,7 +836,7 @@ inline bool push_control_event(const ControlEventType type,
 };
 
 template <bool Block, typename... Args>
-constexpr void push_log_event(const CallSiteStaticData* static_data,
+constexpr void push_log_event(const CallSiteStaticData* static_event_data,
                               Args&&... args)
 {
     // Get the thread context, create it if it hasn't been initialized, and
@@ -826,11 +855,28 @@ constexpr void push_log_event(const CallSiteStaticData* static_data,
     Queue& q = context->get_queue();
     const char* thread_name = context->get_name();
 
+    // To get rid of warnings, clamp size_store to length 1 when there are no
+    // arguments
+    constexpr size_t n_args_clamped
+        = sizeof...(Args) >= 1 ? sizeof...(Args) : 1;
+    size_t size_store[n_args_clamped];
+    size_t size_store_idx = 0;
+
+    auto push_to_store
+        = [&size_store, &size_store_idx](size_t arg_size) -> size_t {
+        size_store[size_store_idx++] = arg_size;
+        return arg_size;
+    };
+
+    // Count the total encoded argument size, and save each argument's size in
+    // size_store
     size_t total_args_size = 0;
     if constexpr (sizeof...(args) > 0)
     {
         total_args_size
-            = (Codec<std::remove_cvref_t<Args>>::encoded_size(args) + ...);
+            = (push_to_store(
+                   Codec<std::remove_cvref_t<Args>>::encoded_size(args))
+               + ...);
     }
     size_t header_plus_args_size = total_args_size + sizeof(LogEventHeader);
 
@@ -864,12 +910,23 @@ constexpr void push_log_event(const CallSiteStaticData* static_data,
             return; // Not enough queue space, drop the event
     }
 
-    Codec<const CallSiteStaticData*>::encode(buffer, static_data);
-    Codec<const char*>::encode(buffer, thread_name);
-    Codec<uint64_t>::encode(buffer, timestamp);
-    Codec<size_t>::encode(buffer, total_args_size);
-    // Encode args
-    ((Codec<std::remove_cvref_t<Args>>::encode(buffer, args)), ...);
+    Codec<StaticDataRef<const CallSiteStaticData>>::encode(
+        buffer, StaticDataRef(static_event_data), sizeof(CallSiteStaticData*));
+    // Since thread_name is a char* with static lifetime it can be encoded
+    // through a StaticDataRef to just copy the pointer and bypass strlen and
+    // having to memcpy the whole string
+    Codec<StaticDataRef<const char>>::encode(
+        buffer, StaticDataRef(thread_name), sizeof(char*));
+    Codec<uint64_t>::encode(buffer, timestamp, sizeof(uint64_t));
+    Codec<size_t>::encode(buffer, total_args_size, sizeof(size_t));
+
+    size_store_idx = 0;
+    auto encode_arg = [&buffer, &size_store, &size_store_idx]<typename ArgT>(
+                          const ArgT& arg) {
+        const size_t size = size_store[size_store_idx++];
+        Codec<std::remove_cvref_t<ArgT>>::encode(buffer, arg, size);
+    };
+    (encode_arg(args), ...);
 
     q.commit_write(write.new_write_pos);
 }

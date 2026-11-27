@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstdlib>
 
+#include "papper/detail/codec.h"
 #include "papper/detail/color.h"
 #include "papper/detail/pattern.h"
 #include "papper/detail/sink.h"
@@ -80,5 +81,13 @@ union ControlEvent
     CPUAffinityEvent cpu_affinity;
     BackendSleepDurationEvent sleep_duration;
 };
+
+static_assert(std::is_trivially_copyable_v<ControlEvent>,
+              "ControlEvent must be trivially copyable");
+
+// Enable the codec that encodes with a simple memcpy for the ControlEvent
+// type, since all its members are trivially copyable
+template <>
+inline constexpr bool enable_simple_codec<ControlEvent> = true;
 
 }

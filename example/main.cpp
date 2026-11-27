@@ -9,17 +9,13 @@
 #include <vector>
 
 #define PAPPER_MIN_LEVEL PAPPER_LEVEL_TRACE
+#include "papper/detail/static_data_ref.h"
 #include "papper/papper.h"
 
 int main()
 {
-    // PAPPER_SET_PATTERN("[{date:Ymd-} {time:HMSus}] {message} hello");
-
-    PAPPER_TRACE("msg");
-    PAPPER_DEBUG("msg");
-    PAPPER_INFO("msg");
-    PAPPER_WARN("msg");
-    PAPPER_ERROR("msg");
+    const char* world = "world";
+    PAPPER_TRACE("Hello {}", papper::detail::StaticDataRef<const char>(world));
 
     // std::random_device rd;
     // std::mt19937 gen(rd());

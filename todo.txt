@@ -1,8 +1,7 @@
 - Crash handling
 - Figure out codecs etc
 - quill::utility::StringRef
-- Set custom level name
-- Compile time level filtering
+- (Set custom level name)
 - Add support for custom sinks
 
 (sudo cpupower frequency-set -g performance)

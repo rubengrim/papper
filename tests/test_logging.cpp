@@ -70,7 +70,7 @@ class LogCapture
         while (std::chrono::steady_clock::now() < deadline)
         {
             // Retried since the marker may be dropped if the queue is full
-            PAPPER_ERROR("{}", marker);
+            PAPPER_ERROR("{}", marker.c_str());
 
             const auto retry_at = std::chrono::steady_clock::now() + 100ms;
             while (std::chrono::steady_clock::now() < retry_at)
@@ -202,10 +202,14 @@ TEST_CASE("logging: arguments of different types are formatted")
     PAPPER_INFO("{:.2f} {}", 3.14159, true);
     PAPPER_INFO("{}{}", 'a', 'b');
     const std::string str = "a string";
-    PAPPER_INFO("[{}] [{}]", str, std::string("temporary"));
-    PAPPER_INFO("{} {} {}", 1, std::string("mixed"), 2.5);
+    const char* temporary = "temporary";
+    PAPPER_INFO("[{}] [{}]", str.c_str(), temporary);
+    const char* mixed = "mixed";
+    PAPPER_INFO("{} {} {}", 1, mixed, 2.5);
     PAPPER_INFO("{{literal braces}}");
-    PAPPER_INFO("{1} {0}", "first", "second");
+    const char* first = "first";
+    const char* second = "second";
+    PAPPER_INFO("{1} {0}", first, second);
     capture.sync();
 
     CHECK(capture.lines()
@@ -226,7 +230,7 @@ TEST_CASE("logging: string arguments are copied at the call site")
 
     {
         std::string str = "original";
-        PAPPER_INFO("{}", str);
+        PAPPER_INFO("{}", str.c_str());
         str = "modified";
     }
     capture.sync();
@@ -321,9 +325,10 @@ TEST_CASE("logging: many threads, no lost or reordered events")
     for (int t = 0; t < n_threads; ++t)
     {
         threads.emplace_back([t] {
+            const char* payload = "payload";
             papper::set_thread_name("w" + std::to_string(t));
             for (int i = 0; i < n_per_thread; ++i)
-                PAPPER_INFO("{} {}", i, std::string("payload"));
+                PAPPER_INFO("{} {}", i, payload);
         });
     }
     for (auto& thread : threads)
@@ -366,10 +371,11 @@ TEST_CASE("logging: a full queue drops events without corrupting others")
     constexpr int n = 20000;
     std::thread worker([&] {
         papper::init_thread(512);
+        const char* payload = "some payload to fill the queue";
         papper::set_thread_name("tiny");
         for (int i = 0; i < n; ++i)
             PAPPER_INFO(
-                "{} {}", i, std::string("some payload to fill the queue"));
+                "{} {}", i, payload);
         // Later events must still get through once there is room again
         capture.sync();
     });
@@ -406,10 +412,11 @@ TEST_CASE("logging: blocking macros wait for queue space instead of dropping")
     constexpr int n = 20000;
     std::thread worker([&] {
         papper::init_thread(512);
+        const char* payload = "some payload to fill the queue";
         papper::set_thread_name("tiny");
         for (int i = 0; i < n; ++i)
             PAPPER_INFO_B(
-                "{} {}", i, std::string("some payload to fill the queue"));
+                "{} {}", i, payload);
     });
     worker.join();
 
